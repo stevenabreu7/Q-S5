@@ -3,7 +3,7 @@ import jax.numpy as np
 from flax import linen as nn
 from .qlayers import QSequenceLayer
 from .qssm_aqt import QuantizationConfig
-from .utils.quantization import q_dot_maybe
+from .utils.quantization import fully_quantized
 
 
 class QStackedEncoderModel(nn.Module):
@@ -27,6 +27,7 @@ class QStackedEncoderModel(nn.Module):
     ssm: nn.Module
     d_model: int
     n_layers: int
+    non_ssm_precision: int
     activation: str = "gelu"
     dropout: float = 0.0
     training: bool = True
@@ -34,13 +35,13 @@ class QStackedEncoderModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
-    q_config: QuantizationConfig = QuantizationConfig()
 
     def setup(self):
         """
         Initializes a linear encoder and the stack of S5 layers.
         """
-        self.encoder = nn.Dense(self.d_model, q_dot_maybe(self.q_config.non_ssm_precision))
+        prec = self.non_ssm_precision
+        self.encoder = nn.Dense(self.d_model, fully_quantized(fwd_bits=prec, bwd_bits=prec))
         self.layers = [
             QSequenceLayer(
                 ssm=self.ssm,
@@ -52,7 +53,7 @@ class QStackedEncoderModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
-                q_config=self.q_config
+                non_ssm_precision=self.non_ssm_precision
             )
             for _ in range(self.n_layers)
         ]
@@ -122,6 +123,7 @@ class QClassificationModel(nn.Module):
     d_model: int
     n_layers: int
     padded: bool
+    non_ssm_precision: int
     activation: str = "gelu"
     dropout: float = 0.2
     training: bool = True
@@ -130,7 +132,6 @@ class QClassificationModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
-    q_config: QuantizationConfig = QuantizationConfig()
 
     def setup(self):
         """
@@ -147,9 +148,10 @@ class QClassificationModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
-                            q_config=self.q_config
+                            non_ssm_precision=self.non_ssm_precision
                                         )
-        self.decoder = nn.Dense(self.d_output, dot_general=q_dot_maybe(self.q_config.non_ssm_precision))
+        prec = self.non_ssm_precision
+        self.decoder = nn.Dense(self.d_output, dot_general=fully_quantized(fwd_bits=prec, bwd_bits=prec))
 
     def __call__(self, x, integration_timesteps):
         """
@@ -208,13 +210,14 @@ class QRetrievalDecoder(nn.Module):
     """
     d_model: int
     d_output: int
-    q_config: QuantizationConfig = QuantizationConfig()
+    non_ssm_precision: int
 
     def setup(self):
         """
         Initializes 2 dense layers to be used for the MLP.
         """
-        dot = q_dot_maybe(self.q_config.non_ssm_precision)
+        prec = self.non_ssm_precision
+        dot = fully_quantized(fwd_bits=prec, bwd_bits=prec)
         self.layer1 = nn.Dense(self.d_model, dot_general=dot)
         self.layer2 = nn.Dense(self.d_output, dot_general=dot)
 
@@ -259,6 +262,7 @@ class QRetrievalModel(nn.Module):
     d_model: int
     n_layers: int
     padded: bool
+    non_ssm_precision: int
     activation: str = "gelu"
     dropout: float = 0.2
     training: bool = True
@@ -266,7 +270,6 @@ class QRetrievalModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
-    q_config: QuantizationConfig = QuantizationConfig()
 
     def setup(self):
         """
@@ -293,7 +296,7 @@ class QRetrievalModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
-                            q_config=self.q_config
+                            non_ssm_precision=self.non_ssm_precision
                                         )
         BatchRetrievalDecoder = nn.vmap(
             RetrievalDecoder,
@@ -306,7 +309,7 @@ class QRetrievalModel(nn.Module):
         self.decoder = BatchRetrievalDecoder(
                                 d_model=self.d_model,
                                 d_output=self.d_output,
-                                q_config=self.q_config
+                                non_ssm_precision=self.non_ssm_precision
                                           )
 
     def __call__(self, input, integration_timesteps):  # input is a tuple of x and lengths
