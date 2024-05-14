@@ -13,6 +13,7 @@ class QStackedEncoderModel(nn.Module):
             d_model     (int32):    this is the feature size of the layer inputs and outputs
                                      we usually refer to this size as H
             n_layers    (int32):    the number of S5 layers to stack
+            non_ssm_precision (int): number of bits for non-ssm components like MLPs
             activation  (string):   Type of activation function to use
             dropout     (float32):  dropout rate
             training    (bool):     whether in training mode or not
@@ -22,7 +23,6 @@ class QStackedEncoderModel(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
-            q_config (QuantizationConfig): Config for SSM and non-SSM bit precisions
     """
     ssm: nn.Module
     d_model: int
