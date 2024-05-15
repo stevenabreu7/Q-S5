@@ -4,6 +4,24 @@ from .qssm_aqt import QuantizationConfig
 from .utils.quantization import q_dot_maybe, q_had_maybe, fully_quantized
 
 
+################### Extra imports for QLayerNorm ###################
+from typing import (Any, Callable, Iterable, Optional, Tuple, Union)
+from flax.linen.dtypes import canonicalize_dtype
+
+from flax.linen.module import Module, compact, merge_param  # pylint: disable=g-multiple-import
+from jax import lax
+from jax.nn import initializers
+import jax.numpy as jnp
+
+PRNGKey = Any
+Array = Any
+Shape = Tuple[int, ...]
+Dtype = Any  # this could be a real type?
+
+Axes = Union[int, Iterable[int]]
+#####################################################################
+
+
 def q_gelu(precision):
     """
         Quantized hard squish function to approximate GeLU.
@@ -12,7 +30,7 @@ def q_gelu(precision):
     _q_had = q_had_maybe(precision)
 
     def _hard_sigmoid(x): # this operates purely on integers!
-        return jnp.min(jnp.max(0,x+2), 4) / 4 # jnp.right_shift allows for pure integer input/output!
+        return jnp.minimum(jnp.maximum(0,x+2), 4) / 4 # jnp.right_shift allows for pure integer input/output!
 
     def _q_gelu(x):
         return _q_had(x, _hard_sigmoid(x))
@@ -75,7 +93,7 @@ def _q_normalize(mdl: Module, x: Array, mean: Array, var: Array,
                use_bias: bool, use_scale: bool,
                bias_init: Callable[[PRNGKey, Shape, Dtype], Array],
                scale_init: Callable[[PRNGKey, Shape, Dtype], Array],
-               quantized_hadamard_operator: Callabe):
+               quantized_hadamard_operator: Callable):
     """"Normalizes the input of a normalization layer and optionally applies a learned scale and bias.  
     Arguments:
       mdl: Module to apply the normalization in (normalization params will reside
@@ -204,9 +222,9 @@ class QSequenceLayer(nn.Module):
     dropout: float
     d_model: int
     non_ssm_precision: int
-    use_hard_sigmoid: False # TODO think about this...
-    use_q_gelu_approx: False
-    gelu_quant: 8
+    use_hard_sigmoid: bool = False # TODO think about this...
+    use_q_gelu_approx: bool = False
+    gelu_quant: int = 8
     activation: str = "gelu"
     training: bool = True
     prenorm: bool = False
@@ -241,10 +259,10 @@ class QSequenceLayer(nn.Module):
 
         self.gate_op = q_had_maybe(prec)
         self.sigmoid = jax.nn.sigmoid
-        if use_hard_sigmoid:
+        if self.use_hard_sigmoid:
             self.sigmoid = jax.nn.hard_sigmoid
         self.gelu = nn.gelu
-        if use_q_gelu_approx:
+        if self.use_q_gelu_approx:
             self.gelu = q_gelu(precision=8)
 
     def __call__(self, x):
