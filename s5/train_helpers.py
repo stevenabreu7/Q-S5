@@ -296,7 +296,9 @@ def prep_batch(batch: tuple,
         raise RuntimeError("Err... not sure what I should do... Unhandled data type. ")
 
     # Convert to JAX.
-    inputs = np.asarray(inputs.numpy())
+    # NOTE: The line below is commented out because this breaks the dynamical system 
+    #       (that is already in JAX)
+    # inputs = np.asarray(inputs.numpy())
 
     # Grab lengths from aux if it is there.
     lengths = aux_data.get('lengths', None)
@@ -321,7 +323,9 @@ def prep_batch(batch: tuple,
         full_inputs = inputs.astype(float)
 
     # Convert and apply.
-    targets = np.array(targets.numpy())
+    # NOTE: The line below is commented out because this breaks the dynamical system 
+    #       (that is already in JAX)
+    # targets = np.array(targets.numpy())
 
     # If there is an aux channel containing the integration times, then add that.
     if 'timesteps' in aux_data.keys():
