@@ -27,24 +27,30 @@ fully_quantized = partial(
 )
 
 
-def q_dot_maybe(lhs_bits: Optional[int], rhs_bits: Optional[int]):
+def q_dot_maybe(lhs_bits: Optional[int], rhs_bits: Optional[int], return_cfg=False):
     if lhs_bits is None and rhs_bits is None:
         return np.dot
     else:
         precision = (lhs_bits, rhs_bits)
         bwd_bits = max([e for e in precision if e is not None])
         dot_general = fully_quantized(fwd_bits=precision, bwd_bits=bwd_bits)
-        return quant_dot_for_dot(dot_general)
+        if return_cfg:
+            return dot_general
+        else:
+            return quant_dot_for_dot(dot_general)
 
 
-def q_had_maybe(lhs_bits: Optional[int], rhs_bits: Optional[int]):
+def q_had_maybe(lhs_bits: Optional[int], rhs_bits: Optional[int], return_cfg=False):
     if lhs_bits is None and rhs_bits is None:
         return np.multiply
     else:
         precision = (lhs_bits, rhs_bits)
         bwd_bits = max([e for e in precision if e is not None])
         dot_general = fully_quantized(fwd_bits=precision, bwd_bits=bwd_bits)
-        return quant_dot_for_hadamard(dot_general)
+        if return_cfg:
+            return dot_general
+        else:
+            return quant_dot_for_hadamard(dot_general)
 
 
 def quant_dot_for_hadamard(dot_general):

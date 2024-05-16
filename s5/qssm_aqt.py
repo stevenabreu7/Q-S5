@@ -99,7 +99,7 @@ def quant_binary_operator(q_i, q_j, qhad_fns):
 
 def build_apply_ssm(q_ops: QuantizedOperations) -> Callable:
 
-    q_bin_op = jax.vmap(jax.jit(partial(quant_binary_operator, qhad_fn=q_ops.a_had)))
+    q_bin_op = jax.vmap(jax.jit(partial(quant_binary_operator, qhad_fns=q_ops.a_had)))
 
     def _apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
         """ Compute the LxH output of discretized SSM given an LxH input.

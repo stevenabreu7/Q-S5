@@ -1,4 +1,6 @@
 from flax import linen as nn
+from typing import Tuple
+import aqt.jax.v2.flax.aqt_flax as aqt
 import jax
 from .qssm_aqt import QuantizationConfig
 from .utils.quantization import q_dot_maybe
@@ -12,6 +14,7 @@ class QSequenceLayer(nn.Module):
             dropout     (float32):  dropout rate
             d_model     (int32):    this is the feature size of the layer inputs and outputs
                                     we usually refer to this size as H
+            q_bits_aw   (int?, int?): quantization precision for activations and weights
             activation  (string):   Type of activation function to use
             training    (bool):     whether in training mode or not
             prenorm     (bool):     apply prenorm if true or postnorm if false
@@ -20,12 +23,11 @@ class QSequenceLayer(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
-            q_config (QuantizationConfig): Contains the dot_general argument for the internal dense layers of this module.
     """
     ssm: nn.Module
     dropout: float
     d_model: int
-    q_config: QuantizationConfig
+    q_bits_aw: Tuple[int]
     activation: str = "gelu"
     training: bool = True
     prenorm: bool = False
@@ -38,7 +40,7 @@ class QSequenceLayer(nn.Module):
         """
         self.seq = self.ssm(step_rescale=self.step_rescale)
         # NOTE: nn.Dense calls dot_general(activation, weights)
-        dot = q_dot_maybe(self.q_config.non_ssm_act_precision, self.q_config.non_ssm_precision)
+        dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
 
         if self.activation in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model, dot_general=dot)

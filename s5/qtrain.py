@@ -162,7 +162,7 @@ def train(args):
             prenorm=args.prenorm,
             batchnorm=args.batchnorm,
             bn_momentum=args.bn_momentum,
-            q_config=q_config,
+            q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
         )
 
     else:
@@ -179,7 +179,7 @@ def train(args):
             prenorm=args.prenorm,
             batchnorm=args.batchnorm,
             bn_momentum=args.bn_momentum,
-            q_config=q_config,
+            q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
         )
 
     # initialize training state
@@ -255,13 +255,14 @@ def train(args):
 
         if valloader is not None:
             print(f"[*] Running Epoch {epoch + 1} Validation...")
+            # adding the prng key so that aqt/flax doesn't complain
             val_loss, val_acc = validate(
-                state, model_cls, valloader, seq_len, in_dim, args.batchnorm
+                state, skey, model_cls, valloader, seq_len, in_dim, args.batchnorm
             )
 
             print(f"[*] Running Epoch {epoch + 1} Test...")
             test_loss, test_acc = validate(
-                state, model_cls, testloader, seq_len, in_dim, args.batchnorm
+                state, skey, model_cls, testloader, seq_len, in_dim, args.batchnorm
             )
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
