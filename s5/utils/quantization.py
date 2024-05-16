@@ -29,7 +29,7 @@ fully_quantized = partial(
 
 def q_dot_maybe(lhs_bits: Optional[int], rhs_bits: Optional[int], return_cfg=False):
     if lhs_bits is None and rhs_bits is None:
-        return np.dot
+        return np.dot if not return_cfg else None
     else:
         precision = (lhs_bits, rhs_bits)
         bwd_bits = max([e for e in precision if e is not None])
@@ -42,7 +42,7 @@ def q_dot_maybe(lhs_bits: Optional[int], rhs_bits: Optional[int], return_cfg=Fal
 
 def q_had_maybe(lhs_bits: Optional[int], rhs_bits: Optional[int], return_cfg=False):
     if lhs_bits is None and rhs_bits is None:
-        return np.multiply
+        return np.multiply if not return_cfg else None
     else:
         precision = (lhs_bits, rhs_bits)
         bwd_bits = max([e for e in precision if e is not None])
