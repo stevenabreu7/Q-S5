@@ -336,7 +336,7 @@ def prep_batch(batch: tuple,
     return full_inputs, targets.astype(float), integration_timesteps
 
 
-def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_params):
+def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_params, loss_fn=cross_entropy_loss):
     """
     Training function for an epoch that loops over batches.
     """
@@ -357,6 +357,7 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
             integration_times,
             model,
             batchnorm,
+            loss_act=loss_fn
         )
         batch_losses.append(loss)
         lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
@@ -380,7 +381,7 @@ def validate(state, skey, model, testloader, seq_len, in_dim, batchnorm, step_re
     return aveloss, aveaccu
 
 
-@partial(jax.jit, static_argnums=(5, 6))
+@partial(jax.jit, static_argnums=(5, 6, 7))
 def train_step(state,
                rng,
                batch_inputs,
@@ -388,6 +389,7 @@ def train_step(state,
                batch_integration_timesteps,
                model,
                batchnorm,
+               loss_act = cross_entropy_loss,
                ):
     """Performs a single training step given a batch of data"""
     rng, drop_rng = jax.random.split(rng)  # moved here from train_epoch
@@ -409,7 +411,7 @@ def train_step(state,
                 mutable=["intermediates"],
             )
 
-        loss = np.mean(cross_entropy_loss(logits, batch_labels))
+        loss = np.mean(loss_act(logits, batch_labels))
 
         return loss, (mod_vars, logits)
 
