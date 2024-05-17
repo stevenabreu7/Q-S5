@@ -367,17 +367,22 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
     return state, np.mean(np.array(batch_losses)), step
 
 
-def validate(state, skey, model, testloader, seq_len, in_dim, batchnorm, step_rescale=1.0):
+def validate(state, skey, model, testloader, seq_len, in_dim, batchnorm, 
+             loss_fn=cross_entropy_loss, calculate_acc=False, step_rescale=1.0):
     """Validation function that loops over batches"""
     model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
-        loss, acc, pred = eval_step(inputs, labels, skey, integration_timesteps, state, model, batchnorm)
+        loss, acc, pred = eval_step(inputs, labels, skey, integration_timesteps, state, model, batchnorm, loss_act=loss_fn, calculate_acc=calculate_acc)
         losses = np.append(losses, loss)
-        accuracies = np.append(accuracies, acc)
+        if calculate_acc:
+            accuracies = np.append(accuracies, acc)
 
-    aveloss, aveaccu = np.mean(losses), np.mean(accuracies)
+    aveloss = np.mean(losses)
+    aveaccu = None
+    if calculate_acc:
+        aveaccu = np.mean(accuracies)
     return aveloss, aveaccu
 
 
@@ -424,7 +429,7 @@ def train_step(state,
     return state, loss
 
 
-@partial(jax.jit, static_argnums=(5, 6))
+@partial(jax.jit, static_argnums=(5, 6, 7, 8))
 def eval_step(batch_inputs,
               batch_labels,
               skey,
@@ -432,6 +437,8 @@ def eval_step(batch_inputs,
               state,
               model,
               batchnorm,
+              loss_act=cross_entropy_loss,
+              calculate_acc=False
               ):
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
@@ -444,7 +451,9 @@ def eval_step(batch_inputs,
                              rngs={"params": skey},
                              )
 
-    losses = cross_entropy_loss(logits, batch_labels)
-    accs = compute_accuracy(logits, batch_labels)
+    losses = loss_act(logits, batch_labels)
+    accs = None
+    if calculate_acc:
+        accs = acc_fun(logits, batch_labels)
 
     return losses, accs, logits
