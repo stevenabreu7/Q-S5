@@ -14,6 +14,7 @@ from .train_helpers import (
     validate,
 )
 from .dataloading import Datasets
+#from .seq_model import BatchClassificationModel, RetrievalModel
 from .qseq_model import QBatchClassificationModel, QRetrievalModel
 from .qssm_aqt import init_qS5SSM, QuantizationConfig
 from .ssm_init import make_DPLR_HiPPO
