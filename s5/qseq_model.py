@@ -1,6 +1,8 @@
+import aqt.jax.v2.flax.aqt_flax as aqt
 import jax
 import jax.numpy as np
 from flax import linen as nn
+from typing import Tuple
 from .qlayers import QSequenceLayer
 from .qssm_aqt import QuantizationConfig
 from .utils.quantization import fully_quantized
@@ -13,6 +15,7 @@ class QStackedEncoderModel(nn.Module):
             d_model     (int32):    this is the feature size of the layer inputs and outputs
                                      we usually refer to this size as H
             n_layers    (int32):    the number of S5 layers to stack
+            q_bits_aw   (int?, int?): quantization precision for activations and weights
             activation  (string):   Type of activation function to use
             dropout     (float32):  dropout rate
             training    (bool):     whether in training mode or not
@@ -22,12 +25,11 @@ class QStackedEncoderModel(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
-            q_config (QuantizationConfig): Config for SSM and non-SSM bit precisions
     """
     ssm: nn.Module
     d_model: int
     n_layers: int
-    non_ssm_precision: int
+    q_bits_aw: Tuple[int]
     activation: str = "gelu"
     dropout: float = 0.0
     training: bool = True
@@ -40,8 +42,9 @@ class QStackedEncoderModel(nn.Module):
         """
         Initializes a linear encoder and the stack of S5 layers.
         """
-        prec = self.non_ssm_precision
-        self.encoder = nn.Dense(self.d_model, fully_quantized(fwd_bits=prec, bwd_bits=prec))
+        # NOTE: nn.Dense calls dot_general(activation, weights)
+        dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
+        self.encoder = nn.Dense(self.d_model, dot_general=dot)
         self.layers = [
             QSequenceLayer(
                 ssm=self.ssm,
@@ -53,7 +56,7 @@ class QStackedEncoderModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
-                non_ssm_precision=self.non_ssm_precision
+                q_bits_aw=self.q_bits_aw
             )
             for _ in range(self.n_layers)
         ]
@@ -105,6 +108,7 @@ class QClassificationModel(nn.Module):
                         we usually refer to this size as H
             n_layers    (int32):    the number of S5 layers to stack
             padded:     (bool):     if true: padding was used
+            q_bits_aw   (int?, int?): quantization precision for activations and weights
             activation  (string):   Type of activation function to use
             dropout     (float32):  dropout rate
             training    (bool):     whether in training mode or not
@@ -116,14 +120,13 @@ class QClassificationModel(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
-            q_config (QuantizationConfig): Config for specifying the precision/bitwidths of SSM and other parameters.
     """
     ssm: nn.Module
     d_output: int
     d_model: int
     n_layers: int
     padded: bool
-    non_ssm_precision: int
+    q_bits_aw: Tuple[int]
     activation: str = "gelu"
     dropout: float = 0.2
     training: bool = True
@@ -148,10 +151,11 @@ class QClassificationModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
-                            non_ssm_precision=self.non_ssm_precision
+                            q_bits_aw=self.q_bits_aw
                                         )
-        prec = self.non_ssm_precision
-        self.decoder = nn.Dense(self.d_output, dot_general=fully_quantized(fwd_bits=prec, bwd_bits=prec))
+        # NOTE: nn.Dense calls dot_general(activation, weights)
+        dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
+        self.decoder = nn.Dense(self.d_output, dot_general=dot)
 
     def __call__(self, x, integration_timesteps):
         """
@@ -206,18 +210,18 @@ class QRetrievalDecoder(nn.Module):
         d_output    (int32):    the output dimension, i.e. the number of classes
         d_model     (int32):    this is the feature size of the layer inputs and outputs
                     we usually refer to this size as H
-        q_config (QuantizationConfig): Config for the quantization of the constituent Dense layers.
+        q_bits_aw   (int?, int?): quantization precision for activations and weights
     """
     d_model: int
     d_output: int
-    non_ssm_precision: int
+    q_bits_aw: Tuple[int]
 
     def setup(self):
         """
         Initializes 2 dense layers to be used for the MLP.
         """
-        prec = self.non_ssm_precision
-        dot = fully_quantized(fwd_bits=prec, bwd_bits=prec)
+        # NOTE: nn.Dense calls dot_general(activation, weights)
+        dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
         self.layer1 = nn.Dense(self.d_model, dot_general=dot)
         self.layer2 = nn.Dense(self.d_output, dot_general=dot)
 
@@ -249,20 +253,20 @@ class QRetrievalModel(nn.Module):
                         we usually refer to this size as H
             n_layers    (int32):    the number of S5 layers to stack
             padded:     (bool):     if true: padding was used
+            q_bits_aw   (int?, int?): quantization precision for activations and weights
             activation  (string):   Type of activation function to use
             dropout     (float32):  dropout rate
             training    (bool):     whether in training mode or not
             prenorm     (bool):     apply prenorm if true or postnorm if false
             batchnorm   (bool):     apply batchnorm if true or layernorm if false
             bn_momentum (float32):  the batchnorm momentum if batchnorm is used
-            q_config (QuantizationConfig): Config containing the SSM and non-SSM quantization bit precisions.
     """
     ssm: nn.Module
     d_output: int
     d_model: int
     n_layers: int
     padded: bool
-    non_ssm_precision: int
+    q_bits_aw: Tuple[int]
     activation: str = "gelu"
     dropout: float = 0.2
     training: bool = True
@@ -296,10 +300,10 @@ class QRetrievalModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
-                            non_ssm_precision=self.non_ssm_precision
+                            q_bits_aw=self.q_bits_aw
                                         )
         BatchRetrievalDecoder = nn.vmap(
-            RetrievalDecoder,
+            QRetrievalDecoder,
             in_axes=0,
             out_axes=0,
             variable_axes={"params": None},
@@ -309,7 +313,7 @@ class QRetrievalModel(nn.Module):
         self.decoder = BatchRetrievalDecoder(
                                 d_model=self.d_model,
                                 d_output=self.d_output,
-                                non_ssm_precision=self.non_ssm_precision
+                                q_bits_aw=self.q_bits_aw
                                           )
 
     def __call__(self, input, integration_timesteps):  # input is a tuple of x and lengths

@@ -1,7 +1,9 @@
 from flax import linen as nn
+from typing import Tuple
+import aqt.jax.v2.flax.aqt_flax as aqt
 import jax
 from .qssm_aqt import QuantizationConfig
-from .utils.quantization import q_dot_maybe, q_had_maybe, fully_quantized
+from .utils.quantization import q_dot_maybe
 
 
 class QSequenceLayer(nn.Module):
@@ -12,6 +14,7 @@ class QSequenceLayer(nn.Module):
             dropout     (float32):  dropout rate
             d_model     (int32):    this is the feature size of the layer inputs and outputs
                                     we usually refer to this size as H
+            q_bits_aw   (int?, int?): quantization precision for activations and weights
             activation  (string):   Type of activation function to use
             training    (bool):     whether in training mode or not
             prenorm     (bool):     apply prenorm if true or postnorm if false
@@ -20,12 +23,11 @@ class QSequenceLayer(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
-            q_config (QuantizationConfig): Contains the dot_general argument for the internal dense layers of this module.
     """
     ssm: nn.Module
     dropout: float
     d_model: int
-    non_ssm_precision: int
+    q_bits_aw: Tuple[int]
     activation: str = "gelu"
     training: bool = True
     prenorm: bool = False
@@ -37,8 +39,8 @@ class QSequenceLayer(nn.Module):
         """Initializes the ssm, batch/layer norm and dropout
         """
         self.seq = self.ssm(step_rescale=self.step_rescale)
-        prec = self.non_ssm_precision
-        dot = fully_quantized(fwd_bits=prec, bwd_bits=prec)
+        # NOTE: nn.Dense calls dot_general(activation, weights)
+        dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
 
         if self.activation in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model, dot_general=dot)

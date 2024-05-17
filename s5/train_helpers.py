@@ -344,10 +344,10 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
 
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim)
-        rng, drop_rng = jax.random.split(rng)
+        # rng, drop_rng = jax.random.split(rng)
         state, loss = train_step(
             state,
-            drop_rng,
+            rng,  # move splitting into train_step
             inputs,
             labels,
             integration_times,
@@ -362,13 +362,13 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
     return state, np.mean(np.array(batch_losses)), step
 
 
-def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=1.0):
+def validate(state, skey, model, testloader, seq_len, in_dim, batchnorm, step_rescale=1.0):
     """Validation function that loops over batches"""
     model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
-        loss, acc, pred = eval_step(inputs, labels, integration_timesteps, state, model, batchnorm)
+        loss, acc, pred = eval_step(inputs, labels, skey, integration_timesteps, state, model, batchnorm)
         losses = np.append(losses, loss)
         accuracies = np.append(accuracies, acc)
 
@@ -386,20 +386,22 @@ def train_step(state,
                batchnorm,
                ):
     """Performs a single training step given a batch of data"""
+    rng, drop_rng = jax.random.split(rng)  # moved here from train_epoch
     def loss_fn(params):
 
         if batchnorm:
+            # adding params rng to make aqt/flax happy
             logits, mod_vars = model.apply(
                 {"params": params, "batch_stats": state.batch_stats},
                 batch_inputs, batch_integration_timesteps,
-                rngs={"dropout": rng},
+                rngs={"dropout": drop_rng, "params": rng},
                 mutable=["intermediates", "batch_stats"],
             )
         else:
             logits, mod_vars = model.apply(
                 {"params": params},
                 batch_inputs, batch_integration_timesteps,
-                rngs={"dropout": rng},
+                rngs={"dropout": drop_rng, "params": rng},
                 mutable=["intermediates"],
             )
 
@@ -416,9 +418,10 @@ def train_step(state,
     return state, loss
 
 
-@partial(jax.jit, static_argnums=(4, 5))
+@partial(jax.jit, static_argnums=(5, 6))
 def eval_step(batch_inputs,
               batch_labels,
+              skey,
               batch_integration_timesteps,
               state,
               model,
@@ -427,10 +430,12 @@ def eval_step(batch_inputs,
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
                              batch_inputs, batch_integration_timesteps,
+                             rngs={"params": skey},
                              )
     else:
         logits = model.apply({"params": state.params},
                              batch_inputs, batch_integration_timesteps,
+                             rngs={"params": skey},
                              )
 
     losses = cross_entropy_loss(logits, batch_labels)
