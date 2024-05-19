@@ -1,27 +1,15 @@
-from flax import linen as nn
-from typing import Tuple
-import aqt.jax.v2.flax.aqt_flax as aqt
-import jax
-from .utils.quantization import q_dot_maybe, q_had_maybe
-
-
-################### Extra imports for QLayerNorm ###################
-from typing import (Any, Callable, Iterable, Optional, Tuple, Union)
-from flax.linen.dtypes import canonicalize_dtype
-
-from flax.linen.module import Module, compact, merge_param  # pylint: disable=g-multiple-import
 from jax import lax
 from jax.nn import initializers
-import jax.numpy as jnp
+from flax import linen as nn
+from flax.linen.dtypes import canonicalize_dtype
+from flax.linen.module import Module, compact
 from flax.linen.normalization import _canonicalize_axes, _abs_sq
-
-PRNGKey = Any
-Array = Any
-Shape = Tuple[int, ...]
-Dtype = Any  # this could be a real type?
-
-Axes = Union[int, Iterable[int]]
-#####################################################################
+from flax.typing import Array, PRNGKey, Dtype, Shape, Axes
+from typing import Any, Callable, Optional, Tuple
+import aqt.jax.v2.flax.aqt_flax as aqt
+import jax
+import jax.numpy as jnp
+from .utils.quantization import q_dot_maybe, q_had_maybe
 
 
 def q_gelu(precision):
@@ -38,7 +26,6 @@ def q_gelu(precision):
         return _q_had(x, _hard_sigmoid(x))
 
     return jax.jit(_q_gelu)
-
 
 
 def _compute_stats(x: Array, axes: Axes,
@@ -199,7 +186,6 @@ def __call__(self, x):
         self.use_bias, self.use_scale,
         self.bias_init, self.scale_init,
         scale_q_hadamard) # TODO is this efficient??
-
 
 
 class QSequenceLayer(nn.Module):
