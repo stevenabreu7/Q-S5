@@ -4,8 +4,7 @@ import jax.numpy as np
 from flax import linen as nn
 from typing import Tuple
 from .qlayers import QSequenceLayer
-from .qssm_aqt import QuantizationConfig
-from .utils.quantization import fully_quantized
+from .utils.quantization import q_dot_maybe
 
 
 class QStackedEncoderModel(nn.Module):

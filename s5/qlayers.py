@@ -2,7 +2,6 @@ from flax import linen as nn
 from typing import Tuple
 import aqt.jax.v2.flax.aqt_flax as aqt
 import jax
-from .qssm_aqt import QuantizationConfig
 from .utils.quantization import q_dot_maybe
 
 
