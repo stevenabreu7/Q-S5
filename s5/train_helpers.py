@@ -366,7 +366,7 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
 
 
 def validate(state, skey, model, testloader, seq_len, in_dim, batchnorm, 
-             loss_fn=cross_entropy_loss, calculate_acc=False, step_rescale=1.0):
+             loss_fn=cross_entropy_loss, calculate_acc=True, step_rescale=1.0):
     """Validation function that loops over batches"""
     model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
@@ -452,6 +452,6 @@ def eval_step(batch_inputs,
     losses = loss_act(logits, batch_labels)
     accs = None
     if calculate_acc:
-        accs = acc_fun(logits, batch_labels)
+        accs = compute_accuracy(logits, batch_labels)
 
     return losses, accs, logits
