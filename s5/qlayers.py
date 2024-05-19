@@ -13,6 +13,7 @@ from flax.linen.module import Module, compact, merge_param  # pylint: disable=g-
 from jax import lax
 from jax.nn import initializers
 import jax.numpy as jnp
+from flax.linen.normalization import _canonicalize_axes, _abs_sq
 
 PRNGKey = Any
 Array = Any
