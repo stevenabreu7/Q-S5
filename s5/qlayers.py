@@ -12,12 +12,12 @@ import jax.numpy as jnp
 from .utils.quantization import q_dot_maybe, q_had_maybe
 
 
-def q_gelu(precision):
+def q_gelu(precision: int):
     """
         Quantized hard squish function to approximate GeLU.
         Operates purely on integers without needing floating points.
     """
-    _q_had = q_had_maybe(precision)
+    _q_had = q_had_maybe(precision, precision)
 
     def _hard_sigmoid(x): # this operates purely on integers!
         return jnp.minimum(jnp.maximum(0,x+2), 4) / 4 # jnp.right_shift allows for pure integer input/output!
@@ -256,7 +256,7 @@ class QSequenceLayer(nn.Module):
 
         # multiplicative gating function
         if act_bits is not None:
-            self.mult_gate = q_had_maybe(act_bits)
+            self.mult_gate = q_had_maybe(act_bits, act_bits)
         else:
             self.mult_gate = jax.numpy.multiply
 
