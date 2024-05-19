@@ -296,7 +296,9 @@ def prep_batch(batch: tuple,
         raise RuntimeError("Err... not sure what I should do... Unhandled data type. ")
 
     # Convert to JAX.
-    inputs = np.asarray(inputs.numpy())
+    # NOTE: The line below is commented out because this breaks the dynamical system 
+    #       (that is already in JAX)
+    # inputs = np.asarray(inputs.numpy())
 
     # Grab lengths from aux if it is there.
     lengths = aux_data.get('lengths', None)
@@ -321,7 +323,9 @@ def prep_batch(batch: tuple,
         full_inputs = inputs.astype(float)
 
     # Convert and apply.
-    targets = np.array(targets.numpy())
+    # NOTE: The line below is commented out because this breaks the dynamical system 
+    #       (that is already in JAX)
+    # targets = np.array(targets.numpy())
 
     # If there is an aux channel containing the integration times, then add that.
     if 'timesteps' in aux_data.keys():
@@ -332,7 +336,7 @@ def prep_batch(batch: tuple,
     return full_inputs, targets.astype(float), integration_timesteps
 
 
-def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_params):
+def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_params, loss_fn=cross_entropy_loss):
     """
     Training function for an epoch that loops over batches.
     """
@@ -353,6 +357,7 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
             integration_times,
             model,
             batchnorm,
+            loss_act=loss_fn
         )
         batch_losses.append(loss)
         lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
@@ -362,21 +367,26 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
     return state, np.mean(np.array(batch_losses)), step
 
 
-def validate(state, skey, model, testloader, seq_len, in_dim, batchnorm, step_rescale=1.0):
+def validate(state, skey, model, testloader, seq_len, in_dim, batchnorm, 
+             loss_fn=cross_entropy_loss, calculate_acc=False, step_rescale=1.0):
     """Validation function that loops over batches"""
     model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
-        loss, acc, pred = eval_step(inputs, labels, skey, integration_timesteps, state, model, batchnorm)
+        loss, acc, pred = eval_step(inputs, labels, skey, integration_timesteps, state, model, batchnorm, loss_act=loss_fn, calculate_acc=calculate_acc)
         losses = np.append(losses, loss)
-        accuracies = np.append(accuracies, acc)
+        if calculate_acc:
+            accuracies = np.append(accuracies, acc)
 
-    aveloss, aveaccu = np.mean(losses), np.mean(accuracies)
+    aveloss = np.mean(losses)
+    aveaccu = None
+    if calculate_acc:
+        aveaccu = np.mean(accuracies)
     return aveloss, aveaccu
 
 
-@partial(jax.jit, static_argnums=(5, 6))
+@partial(jax.jit, static_argnums=(5, 6, 7))
 def train_step(state,
                rng,
                batch_inputs,
@@ -384,6 +394,7 @@ def train_step(state,
                batch_integration_timesteps,
                model,
                batchnorm,
+               loss_act = cross_entropy_loss,
                ):
     """Performs a single training step given a batch of data"""
     rng, drop_rng = jax.random.split(rng)  # moved here from train_epoch
@@ -405,7 +416,7 @@ def train_step(state,
                 mutable=["intermediates"],
             )
 
-        loss = np.mean(cross_entropy_loss(logits, batch_labels))
+        loss = np.mean(loss_act(logits, batch_labels))
 
         return loss, (mod_vars, logits)
 
@@ -418,7 +429,7 @@ def train_step(state,
     return state, loss
 
 
-@partial(jax.jit, static_argnums=(5, 6))
+@partial(jax.jit, static_argnums=(5, 6, 7, 8))
 def eval_step(batch_inputs,
               batch_labels,
               skey,
@@ -426,6 +437,8 @@ def eval_step(batch_inputs,
               state,
               model,
               batchnorm,
+              loss_act=cross_entropy_loss,
+              calculate_acc=False
               ):
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
@@ -438,7 +451,9 @@ def eval_step(batch_inputs,
                              rngs={"params": skey},
                              )
 
-    losses = cross_entropy_loss(logits, batch_labels)
-    accs = compute_accuracy(logits, batch_labels)
+    losses = loss_act(logits, batch_labels)
+    accs = None
+    if calculate_acc:
+        accs = acc_fun(logits, batch_labels)
 
     return losses, accs, logits
