@@ -210,7 +210,7 @@ class QSequenceLayer(nn.Module):
     dropout: float
     d_model: int
     q_bits_aw: Tuple[int]
-    use_hard_sigmoid: bool = False # TODO think about this...
+    use_hard_sigmoid: bool = False
     use_q_gelu_approx: bool = False
     activation: str = "gelu"
     training: bool = True
@@ -226,6 +226,11 @@ class QSequenceLayer(nn.Module):
         # NOTE: nn.Dense calls dot_general(activation, weights)
         dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
         act_bits, _ = self.q_bits_aw
+
+        if act_bits is not None and not self.use_hard_sigmoid:
+            print("[WARNING] Quantized run with real-valued sigmoid function!")
+        if act_bits is not None and not self.use_q_gelu_approx:
+            print("[WARNING] Quantized run with real-valued gelu function!")
 
         if self.activation in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model, dot_general=dot)
