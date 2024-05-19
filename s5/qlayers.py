@@ -1,7 +1,8 @@
 from flax import linen as nn
+from typing import Tuple
+import aqt.jax.v2.flax.aqt_flax as aqt
 import jax
-from .qssm_aqt import QuantizationConfig
-from .utils.quantization import q_dot_maybe, q_had_maybe, fully_quantized
+from .utils.quantization import q_dot_maybe, q_had_maybe
 
 
 ################### Extra imports for QLayerNorm ###################
@@ -124,22 +125,22 @@ def _q_normalize(mdl: Module, x: Array, mean: Array, var: Array,
     feature_shape = [1] * x.ndim
     reduced_feature_shape = []
     for ax in feature_axes:
-    	feature_shape[ax] = x.shape[ax]
-    	reduced_feature_shape.append(x.shape[ax])
+        feature_shape[ax] = x.shape[ax]
+        reduced_feature_shape.append(x.shape[ax])
     y = x - mean
     mul = lax.rsqrt(var + epsilon)
     args = [x]
     if use_scale:
-    	scale = mdl.param('scale', scale_init, reduced_feature_shape,
-    					  param_dtype).reshape(feature_shape)
-    	mul *= scale
-    	args.append(scale)
+        scale = mdl.param('scale', scale_init, reduced_feature_shape,
+                            param_dtype).reshape(feature_shape)
+        mul *= scale
+        args.append(scale)
     y = quantized_hadamard_operator(y, mul)
     if use_bias:
-    	bias = mdl.param('bias', bias_init, reduced_feature_shape,
-    					 param_dtype).reshape(feature_shape)
-    	y += bias
-    	args.append(bias)
+        bias = mdl.param('bias', bias_init, reduced_feature_shape,
+                            param_dtype).reshape(feature_shape)
+        y += bias
+        args.append(bias)
     dtype = canonicalize_dtype(*args, dtype=dtype)
     return jnp.asarray(y, dtype)
 
@@ -189,7 +190,7 @@ def __call__(self, x):
     
     mean, var = _compute_stats(x, self.reduction_axes, self.dtype, None, None)
 
-    scale_q_hadamard = q_had_maybe(scaling_quantization)
+    scale_q_hadamard = q_had_maybe(self.scaling_quantization)
 
     return _q_normalize(
         self, x, mean, var, self.reduction_axes, self.feature_axes,
@@ -208,6 +209,7 @@ class QSequenceLayer(nn.Module):
             dropout     (float32):  dropout rate
             d_model     (int32):    this is the feature size of the layer inputs and outputs
                                     we usually refer to this size as H
+            q_bits_aw   (int?, int?): quantization precision for activations and weights
             activation  (string):   Type of activation function to use
             training    (bool):     whether in training mode or not
             prenorm     (bool):     apply prenorm if true or postnorm if false
@@ -216,15 +218,13 @@ class QSequenceLayer(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
-            q_config (QuantizationConfig): Contains the dot_general argument for the internal dense layers of this module.
     """
     ssm: nn.Module
     dropout: float
     d_model: int
-    non_ssm_precision: int
+    q_bits_aw: Tuple[int]
     use_hard_sigmoid: bool = False # TODO think about this...
     use_q_gelu_approx: bool = False
-    gelu_quant: int = 8
     activation: str = "gelu"
     training: bool = True
     prenorm: bool = False
@@ -236,8 +236,9 @@ class QSequenceLayer(nn.Module):
         """Initializes the ssm, batch/layer norm and dropout
         """
         self.seq = self.ssm(step_rescale=self.step_rescale)
-        prec = self.non_ssm_precision
-        dot = fully_quantized(fwd_bits=prec, bwd_bits=prec)
+        # NOTE: nn.Dense calls dot_general(activation, weights)
+        dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
+        act_bits, _ = self.q_bits_aw
 
         if self.activation in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model, dot_general=dot)
@@ -257,13 +258,19 @@ class QSequenceLayer(nn.Module):
             deterministic=not self.training,
         )
 
-        self.gate_op = q_had_maybe(prec)
+        # multiplicative gating function
+        if act_bits is not None:
+            self.mult_gate = q_had_maybe(act_bits)
+        else:
+            self.mult_gate = jax.numpy.multiply
+
+        # nonlinear activation function
         self.sigmoid = jax.nn.sigmoid
         if self.use_hard_sigmoid:
             self.sigmoid = jax.nn.hard_sigmoid
         self.gelu = nn.gelu
         if self.use_q_gelu_approx:
-            self.gelu = q_gelu(precision=8)
+            self.gelu = q_gelu(precision=act_bits)
 
     def __call__(self, x):
         """
@@ -280,16 +287,16 @@ class QSequenceLayer(nn.Module):
 
         if self.activation in ["full_glu"]:
             x = self.drop(self.gelu(x))
-            x = self.gate_op(self.out1(x), self.sigmoid(self.out2(x)))
+            x = self.mult_gate(self.out1(x), self.sigmoid(self.out2(x)))
             x = self.drop(x)
         elif self.activation in ["half_glu1"]:
             x = self.drop(self.gelu(x))
-            x = self.gate_op(x, self.sigmoid(self.out2(x)))
+            x = self.mult_gate(x, self.sigmoid(self.out2(x)))
             x = self.drop(x)
         elif self.activation in ["half_glu2"]:
             # Only apply GELU to the gate input
             x1 = self.drop(self.gelu(x))
-            x = self.gate_op(x, self.sigmoid(self.out2(x1)))
+            x = self.mult_gate(x, self.sigmoid(self.out2(x1)))
             x = self.drop(x)
         elif self.activation in ["gelu"]:
             x = self.drop(self.gelu(x))
