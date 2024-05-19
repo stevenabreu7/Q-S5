@@ -36,6 +36,8 @@ class QStackedEncoderModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    use_hard_sigmoid: bool = False
+    use_q_gelu_approx: bool = False
 
     def setup(self):
         """
@@ -55,7 +57,9 @@ class QStackedEncoderModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
-                q_bits_aw=self.q_bits_aw
+                q_bits_aw=self.q_bits_aw,
+                use_hard_sigmoid=self.use_hard_sigmoid,
+                use_q_gelu_approx=self.use_q_gelu_approx
             )
             for _ in range(self.n_layers)
         ]
@@ -134,6 +138,8 @@ class QClassificationModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    use_hard_sigmoid: bool = False
+    use_q_gelu_approx: bool = False
 
     def setup(self):
         """
@@ -150,7 +156,9 @@ class QClassificationModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
-                            q_bits_aw=self.q_bits_aw
+                            q_bits_aw=self.q_bits_aw,
+                            use_hard_sigmoid=self.use_hard_sigmoid,
+                            use_q_gelu_approx=self.use_q_gelu_approx
                                         )
         # NOTE: nn.Dense calls dot_general(activation, weights)
         dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
@@ -273,6 +281,8 @@ class QRetrievalModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    use_hard_sigmoid: bool = False
+    use_q_gelu_approx: bool = False
 
     def setup(self):
         """
@@ -299,7 +309,9 @@ class QRetrievalModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
-                            q_bits_aw=self.q_bits_aw
+                            q_bits_aw=self.q_bits_aw,
+                            use_hard_sigmoid=self.use_hard_sigmoid,
+                            use_q_gelu_approx=self.use_q_gelu_approx
                                         )
         BatchRetrievalDecoder = nn.vmap(
             QRetrievalDecoder,
@@ -374,6 +386,8 @@ class QRegressionModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    use_hard_sigmoid: bool = False
+    use_q_gelu_approx: bool = False
 
     def setup(self):
         """
@@ -390,7 +404,9 @@ class QRegressionModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
-                            q_bits_aw=self.q_bits_aw
+                            q_bits_aw=self.q_bits_aw,
+                            use_hard_sigmoid=self.use_hard_sigmoid,
+                            use_q_gelu_approx=self.use_q_gelu_approx
                                         )
         # NOTE: nn.Dense calls dot_general(activation, weights)
         dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))

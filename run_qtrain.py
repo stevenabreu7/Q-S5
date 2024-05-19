@@ -78,6 +78,18 @@ if __name__ == "__main__":
         default=None,
         help="quantization of the activations (if None, use full precision)"
     )
+    parser.add_argument(
+        '--qgelu_approx',
+        type=str2bool,
+        default=False,
+        help="use quantized gelu approximation"
+    )
+    parser.add_argument(
+        '--hard_sigmoid',
+        type=str2bool,
+        default=False,
+        help="use hard sigmoid instead of sigmoid"
+    )
 
     # Model Parameters
     parser.add_argument(

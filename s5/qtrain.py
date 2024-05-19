@@ -164,6 +164,8 @@ def train(args):
             batchnorm=args.batchnorm,
             bn_momentum=args.bn_momentum,
             q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
+            use_hard_sigmoid=args.hard_sigmoid,
+            use_q_gelu_approx=args.qgelu_approx,
         )
 
     else:
@@ -181,6 +183,8 @@ def train(args):
             batchnorm=args.batchnorm,
             bn_momentum=args.bn_momentum,
             q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
+            use_hard_sigmoid=args.hard_sigmoid,
+            use_q_gelu_approx=args.qgelu_approx,
         )
 
     # initialize training state
