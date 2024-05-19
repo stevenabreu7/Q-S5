@@ -167,6 +167,7 @@ class QLayerNorm(Module):
     reduction_axes: Axes for computing normalization statistics.
     feature_axes: Feature axes for learned bias and scaling.
   """
+  scaling_quantization: int
   epsilon: float = 1e-6
   dtype: Optional[Dtype] = None
   param_dtype: Dtype = jnp.float32
@@ -176,7 +177,6 @@ class QLayerNorm(Module):
   scale_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.ones
   reduction_axes: Axes = -1
   feature_axes: Axes = -1
-  scaling_quantization: int = 8 # TODO: is this appropriate as a default?
 
 @compact
 def __call__(self, x):
@@ -251,7 +251,11 @@ class QSequenceLayer(nn.Module):
             self.norm = nn.BatchNorm(use_running_average=not self.training,
                                      momentum=self.bn_momentum, axis_name='batch')
         else:
-            self.norm = nn.QLayerNorm()
+            if act_bits is None:
+                self.norm = nn.LayerNorm()
+            else:
+                # only use qlayernorm if activations are quantized
+                self.norm = nn.QLayerNorm(scaling_quantization=act_bits)
 
         self.drop = nn.Dropout(
             self.dropout,
