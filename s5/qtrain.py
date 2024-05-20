@@ -1,6 +1,9 @@
 from functools import partial
 from jax import random
+import jax
 import jax.numpy as np
+import orbax.checkpoint as ocp
+import os
 from jax.scipy.linalg import block_diag
 import wandb
 
@@ -14,7 +17,6 @@ from .train_helpers import (
     validate,
 )
 from .dataloading import Datasets
-#from .seq_model import BatchClassificationModel, RetrievalModel
 from .qseq_model import QBatchClassificationModel, QRetrievalModel
 from .qssm_aqt import init_qS5SSM, QuantizationConfig
 from .ssm_init import make_DPLR_HiPPO
@@ -25,29 +27,11 @@ def train(args):
     Main function to train over a certain number of epochs
     """
 
-    if args.wandb_apikey is not None:
-        wandb.login(key=args.wandb_apikey)
-
-    best_test_loss = 100000000
-    best_test_acc = -10000.0
-
-    if args.USE_WANDB:
-        # Make wandb config dictionary
-        wandb.init(
-            project=args.wandb_project,
-            job_type="model_training",
-            config=vars(args),
-            entity=args.wandb_entity,
-        )
-    else:
-        wandb.init(mode="offline")
-
     ssm_size = args.ssm_size_base
     ssm_lr = args.ssm_lr_base
 
     # determine the size of initial blocks
     block_size = int(ssm_size / args.blocks)
-    wandb.log({"block_size": block_size})
 
     # Set global learning rate lr (e.g. encoders, etc.) as function of ssm_lr
     lr = args.lr_factor * ssm_lr
@@ -130,7 +114,6 @@ def train(args):
         ssm_act_precision=args.ssm_act_bits,
         non_ssm_act_precision=args.non_ssm_act_bits,
     )
-    # ssm_init_fn = init_S5SSM(H=args.d_model,
     ssm_init_fn = init_qS5SSM(
         H=args.d_model,
         P=ssm_size,
@@ -204,7 +187,79 @@ def train(args):
         dt_global=args.dt_global,
     )
 
-    # Training Loop over epochs
+    # Setup checkpointing & wandb
+    chkpt_metadata = {
+        "best_test_loss": 100000000,
+        "best_test_acc": -10000.0,
+        "wandb_id": None,
+        "last_step": 0,
+        "last_epoch": 0,
+    }
+    restored_state = None
+
+    # create checkpoint manager
+    chkpt_mngr = None
+    if args.run_name is not None and args.checkpoint_dir is not None:
+        # create directory for model checkpoints
+        chkpt_path = os.path.join(args.checkpoint_dir, args.run_name)
+        os.makedirs(chkpt_path, exist_ok=True)
+
+        # create checkpoint manager
+        chkpt_options = ocp.CheckpointManagerOptions(
+            save_interval_steps=args.checkpoint_interval_steps,
+            max_to_keep=args.checkpoint_max_to_keep,
+        )
+        chkpt_mngr = ocp.CheckpointManager(
+            directory=chkpt_path,
+            item_names=("state", "metadata"),
+            options=chkpt_options,
+        )
+        
+        # check if we should load a checkpoint
+        abstract_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
+        if chkpt_mngr.latest_step() is not None:
+            restored = chkpt_mngr.restore(
+                chkpt_mngr.latest_step(),
+                args=ocp.args.Composite(
+                    state=ocp.args.StandardRestore(abstract_state),
+                    metadata=ocp.args.JsonRestore(),
+                )
+            )
+            chkpt_metadata = restored["metadata"]
+            restored_state = restored["state"]
+
+    # Setup wandb
+    if args.wandb_apikey is not None:
+        wandb.login(key=args.wandb_apikey)
+
+    if args.USE_WANDB:
+        # Make wandb config dictionary
+        wandb.init(
+            project=args.wandb_project,
+            job_type="model_training",
+            config=vars(args),
+            entity=args.wandb_entity,
+            name=args.run_name,
+            id=chkpt_metadata["wandb_id"],
+            resume="allow",  # if run_id doesn't exist, make a new run
+        )
+        chkpt_metadata["wandb_id"] = wandb.run.id
+    else:
+        wandb.init(mode="offline")
+
+    wandb.log({"block_size": block_size})
+
+    # Restore training state and other metadata
+    if restored_state is not None:
+        print("\nRestoring train state from checkpoint...\n")
+        state = restored_state
+
+    best_test_loss = chkpt_metadata["best_test_loss"]
+    best_test_acc = chkpt_metadata["best_test_acc"]
+    step = chkpt_metadata["last_step"]
+    epoch_start = chkpt_metadata["last_epoch"]
+
+    # Training loop over epochs
     best_loss, best_acc, best_epoch = (
         100000000,
         -100000000.0,
@@ -212,9 +267,8 @@ def train(args):
     )  # This best loss is val_loss
     count, best_val_loss = 0, 100000000  # This line is for early stopping purposes
     lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
-    step = 0  # for per step learning rate decay
     steps_per_epoch = int(train_size / args.bsz)
-    for epoch in range(args.epochs):
+    for epoch in range(epoch_start, args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
 
         if epoch < args.warmup_end:
@@ -421,6 +475,20 @@ def train(args):
         wandb.run.summary["Best Epoch"] = best_epoch
         wandb.run.summary["Best Test Loss"] = best_test_loss
         wandb.run.summary["Best Test Accuracy"] = best_test_acc
+
+        # save checkpoint
+        if chkpt_mngr is not None:
+            chkpt_metadata["best_test_loss"] = best_test_loss.item()
+            chkpt_metadata["best_test_acc"] = best_test_acc.item()
+            chkpt_metadata["last_step"] = step
+            chkpt_metadata["last_epoch"] = epoch
+            chkpt_mngr.save(
+                step=epoch+1,
+                args=ocp.args.Composite(
+                    state=ocp.args.StandardSave(state),
+                    metadata=ocp.args.JsonSave(chkpt_metadata),
+                )
+            )
 
         if count > args.early_stop_patience:
             break
