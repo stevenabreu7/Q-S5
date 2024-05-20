@@ -15,7 +15,7 @@ if __name__ == "__main__":
         help="parent folder where all checkpoints are stored. if None, no checkpoints are made."
     )
     parser.add_argument(
-        "--checkpoint_interval_steps", type=int, default=1,
+        "--checkpoint_interval_steps", type=int, default=5,
         help="how frequently to store checkpoints."
     )
     parser.add_argument(
