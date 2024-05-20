@@ -193,7 +193,7 @@ def train(args):
         "best_test_acc": -10000.0,
         "wandb_id": None,
         "last_step": 0,
-        "last_epoch": 0,
+        "next_epoch": 0,
     }
     restored_state = None
 
@@ -257,7 +257,7 @@ def train(args):
     best_test_loss = chkpt_metadata["best_test_loss"]
     best_test_acc = chkpt_metadata["best_test_acc"]
     step = chkpt_metadata["last_step"]
-    epoch_start = chkpt_metadata["last_epoch"]
+    epoch_start = chkpt_metadata["next_epoch"]
 
     # Training loop over epochs
     best_loss, best_acc, best_epoch = (
@@ -481,7 +481,7 @@ def train(args):
             chkpt_metadata["best_test_loss"] = best_test_loss.item()
             chkpt_metadata["best_test_acc"] = best_test_acc.item()
             chkpt_metadata["last_step"] = step
-            chkpt_metadata["last_epoch"] = epoch
+            chkpt_metadata["next_epoch"] = epoch + 1
             chkpt_mngr.save(
                 step=epoch+1,
                 args=ocp.args.Composite(
@@ -489,6 +489,7 @@ def train(args):
                     metadata=ocp.args.JsonSave(chkpt_metadata),
                 )
             )
+            chkpt_mngr.wait_until_finished()
 
         if count > args.early_stop_patience:
             break
