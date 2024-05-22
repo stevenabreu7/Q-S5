@@ -134,58 +134,55 @@ def _q_normalize(mdl: Module, x: Array, mean: Array, var: Array,
 
 
 class QLayerNorm(Module):
-  """Layer normalization (https://arxiv.org/abs/1607.06450).
+    """Layer normalization (https://arxiv.org/abs/1607.06450).
 
-  LayerNorm normalizes the activations of the layer for each given example in a
-  batch independently, rather than across a batch like Batch Normalization.
-  i.e. applies a transformation that maintains the mean activation within
-  each example close to 0 and the activation standard deviation close to 1.
+    LayerNorm normalizes the activations of the layer for each given example in a
+    batch independently, rather than across a batch like Batch Normalization.
+    i.e. applies a transformation that maintains the mean activation within
+    each example close to 0 and the activation standard deviation close to 1.
 
-  Attributes:
-    epsilon: A small float added to variance to avoid dividing by zero.
-    dtype: the dtype of the result (default: infer from input and params).
-    param_dtype: the dtype passed to parameter initializers (default: float32).
-    use_bias:  If True, bias (beta) is added.
-    use_scale: If True, multiply by scale (gamma). When the next layer is linear
-      (also e.g. nn.relu), this can be disabled since the scaling will be done
-      by the next layer.
-    bias_init: Initializer for bias, by default, zero.
-    scale_init: Initializer for scale, by default, one.
-    reduction_axes: Axes for computing normalization statistics.
-    feature_axes: Feature axes for learned bias and scaling.
-  """
-  scaling_quantization: int
-  epsilon: float = 1e-6
-  dtype: Optional[Dtype] = None
-  param_dtype: Dtype = jnp.float32
-  use_bias: bool = False
-  use_scale: bool = True
-  bias_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.zeros
-  scale_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.ones
-  reduction_axes: Axes = -1
-  feature_axes: Axes = -1
-
-@compact
-def __call__(self, x):
-    """Applies layer normalization on the input.
-
-    Args:
-      x: the inputs
-
-    Returns:
-      Normalized inputs (the same shape as inputs).
+    Attributes:
+      epsilon: A small float added to variance to avoid dividing by zero.
+      dtype: the dtype of the result (default: infer from input and params).
+      param_dtype: the dtype passed to parameter initializers (default: float32).
+      use_bias:  If True, bias (beta) is added.
+      use_scale: If True, multiply by scale (gamma). When the next layer is linear
+        (also e.g. nn.relu), this can be disabled since the scaling will be done
+        by the next layer.
+      bias_init: Initializer for bias, by default, zero.
+      scale_init: Initializer for scale, by default, one.
+      reduction_axes: Axes for computing normalization statistics.
+      feature_axes: Feature axes for learned bias and scaling.
     """
-    
-    mean, var = _compute_stats(x, self.reduction_axes, self.dtype, None, None)
+    scaling_quantization: int
+    epsilon: float = 1e-6
+    dtype: Optional[Dtype] = None
+    param_dtype: Dtype = jnp.float32
+    use_bias: bool = False
+    use_scale: bool = True
+    bias_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.zeros
+    scale_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.ones
+    reduction_axes: Axes = -1
+    feature_axes: Axes = -1
 
-    scale_q_hadamard = q_had_maybe(self.scaling_quantization)
+    @compact
+    def __call__(self, x):
+        """Applies layer normalization on the input.
 
-    return _q_normalize(
-        self, x, mean, var, self.reduction_axes, self.feature_axes,
-        self.dtype, self.param_dtype, self.epsilon,
-        self.use_bias, self.use_scale,
-        self.bias_init, self.scale_init,
-        scale_q_hadamard) # TODO is this efficient??
+        Args:
+          x: the inputs
+
+        Returns:
+          Normalized inputs (the same shape as inputs).
+        """
+        mean, var = _compute_stats(x, self.reduction_axes, self.dtype, None, None)
+        scale_q_hadamard = q_had_maybe(self.scaling_quantization, self.scaling_quantization)
+        return _q_normalize(
+            self, x, mean, var, self.reduction_axes, self.feature_axes,
+            self.dtype, self.param_dtype, self.epsilon,
+            self.use_bias, self.use_scale,
+            self.bias_init, self.scale_init,
+            scale_q_hadamard) # TODO is this efficient??
 
 
 class QSequenceLayer(nn.Module):
@@ -231,6 +228,8 @@ class QSequenceLayer(nn.Module):
             print("[WARNING] Quantized run with real-valued sigmoid function!")
         if act_bits is not None and not self.use_q_gelu_approx:
             print("[WARNING] Quantized run with real-valued gelu function!")
+        if act_bits is not None and self.batchnorm:
+            print("[WARNING] Quantized run with real-valued batchnorm!")
 
         if self.activation in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model, dot_general=dot)
@@ -246,7 +245,7 @@ class QSequenceLayer(nn.Module):
                 self.norm = nn.LayerNorm()
             else:
                 # only use qlayernorm if activations are quantized
-                self.norm = nn.QLayerNorm(scaling_quantization=act_bits)
+                self.norm = QLayerNorm(scaling_quantization=act_bits)
 
         self.drop = nn.Dropout(
             self.dropout,
