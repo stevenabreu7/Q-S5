@@ -184,6 +184,7 @@ def train(args):
         opt_config=args.opt_config,
         ssm_lr=ssm_lr,
         lr=lr,
+        grad_clip_threshold=args.grad_clip_threshold,
         dt_global=args.dt_global,
     )
 

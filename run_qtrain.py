@@ -261,6 +261,9 @@ if __name__ == "__main__":
         "BfastandCdecay: weight decay on B (global lr), weight decay on C (global lr) \\"
         "noBCdecay:      no weight decay on B (ssm lr), no weight decay on C (ssm lr) \\",
     )
+    parser.add_argument(
+        "--grad_clip_threshold", type=str, default=None, help="max norm for gradient clipping."
+    )
     parser.add_argument("--jax_seed", type=int, default=1919, help="seed randomness")
 
     train(parser.parse_args())
