@@ -7,6 +7,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "--run_name", type=str, default=None,
+        help="name of this run (for wandb and checkpoint folder). if None, no checkpoints are made."
+    )
+    parser.add_argument(
+        "--checkpoint_dir", type=str, default=None,
+        help="parent folder where all checkpoints are stored. if None, no checkpoints are made."
+    )
+    parser.add_argument(
+        "--checkpoint_interval_steps", type=int, default=5,
+        help="how frequently to store checkpoints."
+    )
+    parser.add_argument(
+        "--checkpoint_max_to_keep", type=int, default=3,
+        help="how many checkpoints to keep."
+    )
+
+    parser.add_argument(
         "--USE_WANDB", type=str2bool, default=False, help="log with wandb?"
     )
     parser.add_argument(
