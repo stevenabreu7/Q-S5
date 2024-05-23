@@ -1,4 +1,5 @@
 from functools import partial
+from flax.training import train_state
 from jax import random
 import jax
 import jax.numpy as np
@@ -144,6 +145,8 @@ def evaluate(args):
             q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
             use_hard_sigmoid=args.hard_sigmoid,
             use_q_gelu_approx=args.qgelu_approx,
+            use_qlayernorm_if_quantized=args.use_qlayernorm_if_quantized,
+            use_layernorm_bias=args.use_layernorm_bias,
         )
 
     else:
@@ -163,6 +166,8 @@ def evaluate(args):
             q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
             use_hard_sigmoid=args.hard_sigmoid,
             use_q_gelu_approx=args.qgelu_approx,
+            use_qlayernorm_if_quantized=args.use_qlayernorm_if_quantized,
+            use_layernorm_bias=args.use_layernorm_bias,
         )
 
     # initialize training state
@@ -195,9 +200,10 @@ def evaluate(args):
 
     # create checkpoint manager
     chkpt_mngr = None
-    if args.run_name is not None and args.checkpoint_dir is not None:
+    if args.load_run_name is not None and args.checkpoint_dir is not None:
+        print("loading checkpoint:", args.load_run_name, args.checkpoint_dir)
         # create directory for model checkpoints
-        chkpt_path = os.path.join(args.checkpoint_dir, args.run_name)
+        chkpt_path = os.path.join(args.checkpoint_dir, args.load_run_name)
         os.makedirs(chkpt_path, exist_ok=True)
 
         # create checkpoint manager
@@ -210,10 +216,20 @@ def evaluate(args):
             item_names=("state", "metadata"),
             options=chkpt_options,
         )
-        
+
         # check if we should load a checkpoint
-        abstract_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
         if chkpt_mngr.latest_step() is not None:
+            if args.remove_norm_bias_from_checkpoint:
+                # NOTE: this hack was only tested for sMNIST
+                print("attempting to remove norm bias from checkpoint")
+                newstateparams = jax.tree_util.tree_map(
+                    lambda x: x if not hasattr(x, 'keys') else {'scale': x['scale'], 'bias': x.get('bias', x['scale'])},
+                    state.params,
+                    is_leaf=lambda x: not hasattr(x, 'keys') or 'scale' in x.keys()
+                )
+                state = train_state.TrainState.create(apply_fn=state.apply_fn, params=newstateparams, tx=state.tx)
+
+            abstract_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
             restored = chkpt_mngr.restore(
                 chkpt_mngr.latest_step(),
                 args=ocp.args.Composite(
@@ -221,91 +237,45 @@ def evaluate(args):
                     metadata=ocp.args.JsonRestore(),
                 )
             )
+
             chkpt_metadata = restored["metadata"]
-            restored_state = restored["state"]
+            print(chkpt_metadata)
 
-    # Setup wandb
-    if args.wandb_apikey is not None:
-        wandb.login(key=args.wandb_apikey)
-
-    if args.USE_WANDB:
-        # Make wandb config dictionary
-        wandb.init(
-            project=args.wandb_project,
-            job_type="model_training",
-            config=vars(args),
-            entity=args.wandb_entity,
-            name=args.run_name,
-            id=chkpt_metadata["wandb_id"],
-            resume="allow",  # if run_id doesn't exist, make a new run
-        )
-        chkpt_metadata["wandb_id"] = wandb.run.id
+            print("\nRestoring train state from checkpoint...")
+            state = restored["state"]
+            if args.remove_norm_bias_from_checkpoint:
+                # NOTE: this hack was only tested for sMNIST
+                print("removing norm bias from checkpoint")
+                newstateparams = jax.tree_util.tree_map(
+                    lambda x: x if not hasattr(x, 'keys') else {'scale': x['scale']},
+                    state.params,
+                    is_leaf=lambda x: not hasattr(x, 'keys') or 'scale' in x.keys()
+                )
+                state = train_state.TrainState.create(apply_fn=state.apply_fn, params=newstateparams, tx=state.tx)
+        else:
+            print(f"\n[WARNING] no checkpoint found for {args.load_run_name}!!\n")
     else:
-        wandb.init(mode="offline")
+        print("\n[WARNING] running evaluation without loading a checkpoint!!\n")
 
-    wandb.log({"block_size": block_size})
-
-    # Restore training state and other metadata
-    if restored_state is not None:
-        print("\nRestoring train state from checkpoint...\n")
-        state = restored_state
-
-    best_test_loss = chkpt_metadata["best_test_loss"]
-    best_test_acc = chkpt_metadata["best_test_acc"]
-    # step = chkpt_metadata["last_step"]
-    # epoch_start = chkpt_metadata["next_epoch"]
-
-    # # Training loop over epochs
-    # best_loss, best_acc, best_epoch = (
-    #     100000000,
-    #     -100000000.0,
-    #     0,
-    # )  # This best loss is val_loss
-    # count, best_val_loss = 0, 100000000  # This line is for early stopping purposes
-    # lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
-    # steps_per_epoch = int(train_size / args.bsz)
-    # print(f"[*] Starting Training Epoch {epoch + 1}...")
-
-    # if epoch < args.warmup_end:
-    #     print("using linear warmup for epoch {}".format(epoch + 1))
-    #     decay_function = linear_warmup
-    #     end_step = steps_per_epoch * args.warmup_end
-
-    # elif args.cosine_anneal:
-    #     print("using cosine annealing for epoch {}".format(epoch + 1))
-    #     decay_function = cosine_annealing
-    #     # for per step learning rate decay
-    #     end_step = steps_per_epoch * args.epochs - (
-    #         steps_per_epoch * args.warmup_end
+    # # Setup wandb
+    # if args.wandb_apikey is not None:
+    #     wandb.login(key=args.wandb_apikey)
+    # if args.USE_WANDB:
+    #     # Make wandb config dictionary
+    #     wandb.init(
+    #         project=args.wandb_project,
+    #         job_type="model_training",
+    #         config=vars(args),
+    #         entity=args.wandb_entity,
+    #         name=args.run_name,
     #     )
     # else:
-    #     print("using constant lr for epoch {}".format(epoch + 1))
-    #     decay_function = constant_lr
-    #     end_step = None
-
-    # # TODO: Switch to letting Optax handle this.
-    # #  Passing this around to manually handle per step learning rate decay.
-    # lr_params = (
-    #     decay_function,
-    #     ssm_lr,
-    #     lr,
-    #     step,
-    #     end_step,
-    #     args.opt_config,
-    #     args.lr_min,
-    # )
+    #     wandb.init(mode="offline")
+    # wandb.log({"block_size": block_size})
+    # best_test_loss = chkpt_metadata["best_test_loss"]
+    # best_test_acc = chkpt_metadata["best_test_acc"]
 
     train_rng, skey = random.split(train_rng)
-    # state, train_loss, step = train_epoch(
-    #     state,
-    #     skey,
-    #     model_cls,
-    #     trainloader,
-    #     seq_len,
-    #     in_dim,
-    #     args.batchnorm,
-    #     lr_params,
-    # )
     train_loss, train_acc = validate(
         state, skey, model_cls, trainloader, seq_len, in_dim, args.batchnorm
     )
@@ -322,6 +292,8 @@ def evaluate(args):
         test_loss, test_acc = validate(
             state, skey, model_cls, testloader, seq_len, in_dim, args.batchnorm
         )
+
+        print(args.run_name)
 
         print(f"\n=>> Metrics ===")
         print(
@@ -344,156 +316,35 @@ def evaluate(args):
             f" Train Accuracy: {train_acc:.4f} Test Accuracy: {val_acc:.4f}"
         )
 
-    # # For early stopping purposes
-    # if val_loss < best_val_loss:
-    #     count = 0
-    #     best_val_loss = val_loss
-    # else:
-    #     count += 1
+    with open(f"/home/sabreu/NeuroSSMs/ptq_results_{args.run_name}.txt", "w") as f:
+        header = "train_loss,val_loss,test_loss,train_acc,val_acc,test_acc"
+        f.write(f"{header}\n{train_loss},{val_loss},{test_loss},{train_acc},{val_acc},{test_acc}\n")
 
-    # if val_acc > best_acc:
-    #     # Increment counters etc.
-    #     count = 0
-    #     best_loss, best_acc, best_epoch = val_loss, val_acc, epoch
-    #     if valloader is not None:
-    #         best_test_loss, best_test_acc = test_loss, test_acc
-    #     else:
-    #         best_test_loss, best_test_acc = best_loss, best_acc
-
-    #     # Do some validation on improvement.
-    #     if speech:
-    #         # Evaluate on resolution 2 val and test sets
-    #         print(f"[*] Running Epoch {epoch + 1} Res 2 Validation...")
-    #         val2_loss, val2_acc = validate(
-    #             state,
-    #             model_cls,
-    #             aux_dataloaders["valloader2"],
-    #             int(seq_len // 2),
-    #             in_dim,
-    #             args.batchnorm,
-    #             step_rescale=2.0,
-    #         )
-
-    #         print(f"[*] Running Epoch {epoch + 1} Res 2 Test...")
-    #         test2_loss, test2_acc = validate(
-    #             state,
-    #             model_cls,
-    #             aux_dataloaders["testloader2"],
-    #             int(seq_len // 2),
-    #             in_dim,
-    #             args.batchnorm,
-    #             step_rescale=2.0,
-    #         )
-    #         print(f"\n=>> Epoch {epoch + 1} Res 2 Metrics ===")
-    #         print(
-    #             f"\tVal2 Loss: {val2_loss:.5f} --Test2 Loss: {test2_loss:.5f} --"
-    #             f" Val Accuracy: {val2_acc:.4f}"
-    #             f" Test Accuracy: {test2_acc:.4f}"
-    #         )
-
-    # # For learning rate decay purposes:
-    # input = lr, ssm_lr, lr_count, val_acc, opt_acc
-    # lr, ssm_lr, lr_count, opt_acc = reduce_lr_on_plateau(
-    #     input,
-    #     factor=args.reduce_factor,
-    #     patience=args.lr_patience,
-    #     lr_min=args.lr_min,
-    # )
-
-    # # Print best accuracy & loss so far...
-    # print(
-    #     f"\tBest Val Loss: {best_loss:.5f} -- Best Val Accuracy:"
-    #     f" {best_acc:.4f} at Epoch {best_epoch + 1}\n"
-    #     f"\tBest Test Loss: {best_test_loss:.5f} -- Best Test Accuracy:"
-    #     f" {best_test_acc:.4f} at Epoch {best_epoch + 1}\n"
-    # )
-
-    if valloader is not None:
-        if speech:
-            wandb.log(
-                {
-                    "Training Loss": train_loss,
-                    "Training Accuracy": train_acc,
-                    "Val loss": val_loss,
-                    "Val Accuracy": val_acc,
-                    "Test Loss": test_loss,
-                    "Test Accuracy": test_acc,
-                    # "count": count,
-                    # "Learning rate count": lr_count,
-                    # "Opt acc": opt_acc,
-                    # "lr": state.opt_state.inner_states[
-                    #     "regular"
-                    # ].inner_state.hyperparams["learning_rate"],
-                    # "ssm_lr": state.opt_state.inner_states[
-                    #     "ssm"
-                    # ].inner_state.hyperparams["learning_rate"],
-                }
-            )
-        else:
-            wandb.log(
-                {
-                    "Training Loss": train_loss,
-                    "Training Accuracy": train_acc,
-                    "Val loss": val_loss,
-                    "Val Accuracy": val_acc,
-                    "Test Loss": test_loss,
-                    "Test Accuracy": test_acc,
-                    # "count": count,
-                    # "Learning rate count": lr_count,
-                    # "Opt acc": opt_acc,
-                    # "lr": state.opt_state.inner_states[
-                    #     "regular"
-                    # ].inner_state.hyperparams["learning_rate"],
-                    # "ssm_lr": state.opt_state.inner_states[
-                    #     "ssm"
-                    # ].inner_state.hyperparams["learning_rate"],
-                }
-            )
-
-    else:
-        wandb.log(
-            {
-                "Training Loss": train_loss,
-                "Training Accuracy": train_acc,
-                "Val loss": val_loss,
-                "Val Accuracy": val_acc,
-                # "count": count,
-                # "Learning rate count": lr_count,
-                # "Opt acc": opt_acc,
-                # "lr": state.opt_state.inner_states[
-                #     "regular"
-                # ].inner_state.hyperparams["learning_rate"],
-                # "ssm_lr": state.opt_state.inner_states[
-                #     "ssm"
-                # ].inner_state.hyperparams["learning_rate"],
-            }
-        )
-    wandb.run.summary["Training Loss"] = train_loss
-    wandb.run.summary["Training Accuracy"] = train_acc
-    wandb.run.summary["Val Loss"] = val_loss
-    wandb.run.summary["Val Accuracy"] = val_acc
-    wandb.run.summary["Test Loss"] = test_loss
-    wandb.run.summary["Test Accuracy"] = test_acc
-    # wandb.run.summary["Best Val Loss"] = best_loss
-    # wandb.run.summary["Best Val Accuracy"] = best_acc
-    # wandb.run.summary["Best Epoch"] = best_epoch
-    wandb.run.summary["Best Test Loss"] = best_test_loss
-    wandb.run.summary["Best Test Accuracy"] = best_test_acc
-
-    # # save checkpoint
-    # if chkpt_mngr is not None:
-    #     chkpt_metadata["best_test_loss"] = best_test_loss.item()
-    #     chkpt_metadata["best_test_acc"] = best_test_acc.item()
-    #     chkpt_metadata["last_step"] = step
-    #     chkpt_metadata["next_epoch"] = epoch + 1
-    #     chkpt_mngr.save(
-    #         step=epoch+1,
-    #         args=ocp.args.Composite(
-    #             state=ocp.args.StandardSave(state),
-    #             metadata=ocp.args.JsonSave(chkpt_metadata),
-    #         )
+    # if valloader is not None:
+    #     wandb.log(
+    #         {
+    #             "Training Loss": train_loss,
+    #             "Training Accuracy": train_acc,
+    #             "Val loss": val_loss,
+    #             "Val Accuracy": val_acc,
+    #             "Test Loss": test_loss,
+    #             "Test Accuracy": test_acc,
+    #         }
     #     )
-    #     chkpt_mngr.wait_until_finished()
-
-    # if count > args.early_stop_patience:
-    #     break
+    # else:
+    #     wandb.log(
+    #         {
+    #             "Training Loss": train_loss,
+    #             "Training Accuracy": train_acc,
+    #             "Val loss": val_loss,
+    #             "Val Accuracy": val_acc,
+    #         }
+    #     )
+    # wandb.run.summary["Training Loss"] = train_loss
+    # wandb.run.summary["Training Accuracy"] = train_acc
+    # wandb.run.summary["Val Loss"] = val_loss
+    # wandb.run.summary["Val Accuracy"] = val_acc
+    # wandb.run.summary["Test Loss"] = test_loss
+    # wandb.run.summary["Test Accuracy"] = test_acc
+    # wandb.run.summary["Best Test Loss"] = best_test_loss
+    # wandb.run.summary["Best Test Accuracy"] = best_test_acc

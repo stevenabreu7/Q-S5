@@ -112,6 +112,19 @@ if __name__ == "__main__":
         help="use hard sigmoid instead of sigmoid"
     )
 
+    parser.add_argument(
+        '--use_qlayernorm_if_quantized', type=str2bool, default=True,
+        help="use quantized layernorm if quantized (default: True). If false, force *un*quantized layernorm (even with quantized activations)."
+    )
+    parser.add_argument(
+        '--remove_norm_bias_from_checkpoint', type=str2bool, default=False,
+        help="when loading the checkpoint, remove the biases from the norms."
+    )
+    parser.add_argument(
+        '--use_layernorm_bias', type=str2bool, default=True,
+        help="whether to use a bias in the (unquantized) layernorm."
+    )
+
     # Model Parameters
     parser.add_argument(
         "--n_layers", type=int, default=6, help="Number of layers in the network"
