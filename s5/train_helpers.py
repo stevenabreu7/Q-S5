@@ -93,6 +93,7 @@ def create_train_state(model_cls,
                        opt_config="standard",
                        ssm_lr=1e-3,
                        lr=1e-3,
+                       grad_clip_threshold=None,
                        dt_global=False
                        ):
     """
@@ -110,9 +111,21 @@ def create_train_state(model_cls,
     :param opt_config:
     :param ssm_lr:
     :param lr:
+    :param grad_clip_threshold:
     :param dt_global:
     :return:
     """
+
+    def inject_hyperparams_clipped(opt_cls):
+        def inner_func(**kwargs):
+            if grad_clip_threshold is None:
+                return optax.inject_hyperparams(opt_cls)(**kwargs)
+            else:
+                return optax.chain(
+                    optax.inject_hyperparams(opt_cls)(**kwargs),
+                    optax.clip_by_global_norm(grad_clip_threshold)
+                )
+        return inner_func
 
     if padded:
         if retrieval:
@@ -161,9 +174,9 @@ def create_train_state(model_cls,
             )
         tx = optax.multi_transform(
             {
-                "none": optax.inject_hyperparams(optax.sgd)(learning_rate=0.0),
-                "ssm": optax.inject_hyperparams(optax.adam)(learning_rate=ssm_lr),
-                "regular": optax.inject_hyperparams(optax.adamw)(learning_rate=lr,
+                "none": inject_hyperparams_clipped(optax.sgd)(learning_rate=0.0),
+                "ssm": inject_hyperparams_clipped(optax.adam)(learning_rate=ssm_lr),
+                "regular": inject_hyperparams_clipped(optax.adamw)(learning_rate=lr,
                                                                  weight_decay=weight_decay),
             },
             ssm_fn,
@@ -188,10 +201,10 @@ def create_train_state(model_cls,
             )
         tx = optax.multi_transform(
             {
-                "none": optax.inject_hyperparams(optax.adamw)(learning_rate=ssm_lr,
+                "none": inject_hyperparams_clipped(optax.adamw)(learning_rate=ssm_lr,
                                                               weight_decay=weight_decay),
-                "ssm": optax.inject_hyperparams(optax.adam)(learning_rate=ssm_lr),
-                "regular": optax.inject_hyperparams(optax.adamw)(learning_rate=lr,
+                "ssm": inject_hyperparams_clipped(optax.adam)(learning_rate=ssm_lr),
+                "regular": inject_hyperparams_clipped(optax.adamw)(learning_rate=lr,
                                                                  weight_decay=weight_decay),
             },
             ssm_fn,
@@ -216,9 +229,9 @@ def create_train_state(model_cls,
             )
         tx = optax.multi_transform(
             {
-                "none": optax.inject_hyperparams(optax.adamw)(learning_rate=0.0),
-                "ssm": optax.inject_hyperparams(optax.adam)(learning_rate=ssm_lr),
-                "regular": optax.inject_hyperparams(optax.adamw)(learning_rate=lr,
+                "none": inject_hyperparams_clipped(optax.adamw)(learning_rate=0.0),
+                "ssm": inject_hyperparams_clipped(optax.adam)(learning_rate=ssm_lr),
+                "regular": inject_hyperparams_clipped(optax.adamw)(learning_rate=lr,
                                                                  weight_decay=weight_decay),
             },
             ssm_fn,
@@ -245,9 +258,9 @@ def create_train_state(model_cls,
             )
         tx = optax.multi_transform(
             {
-                "none": optax.inject_hyperparams(optax.sgd)(learning_rate=0.0),
-                "ssm": optax.inject_hyperparams(optax.adam)(learning_rate=ssm_lr),
-                "regular": optax.inject_hyperparams(optax.adamw)(learning_rate=lr,
+                "none": inject_hyperparams_clipped(optax.sgd)(learning_rate=0.0),
+                "ssm": inject_hyperparams_clipped(optax.adam)(learning_rate=ssm_lr),
+                "regular": inject_hyperparams_clipped(optax.adamw)(learning_rate=lr,
                                                                  weight_decay=weight_decay),
             },
             ssm_fn,
