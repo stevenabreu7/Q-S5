@@ -116,14 +116,16 @@ def create_train_state(model_cls,
     :return:
     """
 
-    def inject_hyperparams_clipped(opt_cls, **kwargs):
-        if grad_clip_threshold is None:
-            return optax.inject_hyperparams(opt_cls)(**kwargs)
-        else:
-            return optax.chain(
-                optax.inject_hyperparams(opt_cls)(**kwargs),
-                optax.clip_by_global_norm(grad_clip_threshold)
-            )
+    def inject_hyperparams_clipped(opt_cls):
+        def inner_func(**kwargs):
+            if grad_clip_threshold is None:
+                return optax.inject_hyperparams(opt_cls)(**kwargs)
+            else:
+                return optax.chain(
+                    optax.inject_hyperparams(opt_cls)(**kwargs),
+                    optax.clip_by_global_norm(grad_clip_threshold)
+                )
+        return inner_func
 
     if padded:
         if retrieval:
