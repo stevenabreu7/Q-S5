@@ -1,10 +1,14 @@
 import argparse
 from s5.utils.util import str2bool
-from s5.qtrain import train
+from s5.qeval import evaluate
 from s5.dataloading import Datasets
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--load_run_name", type=str, default=None, help="name of run to load"
+    )
 
     parser.add_argument(
         "--run_name", type=str, default=None,
@@ -266,4 +270,4 @@ if __name__ == "__main__":
     )
     parser.add_argument("--jax_seed", type=int, default=1919, help="seed randomness")
 
-    train(parser.parse_args())
+    evaluate(parser.parse_args())

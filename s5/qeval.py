@@ -9,11 +9,6 @@ import wandb
 
 from .train_helpers import (
     create_train_state,
-    reduce_lr_on_plateau,
-    linear_warmup,
-    cosine_annealing,
-    constant_lr,
-    train_epoch,
     validate,
 )
 from .dataloading import Datasets
@@ -22,9 +17,9 @@ from .qssm_aqt import init_qS5SSM, QuantizationConfig
 from .ssm_init import make_DPLR_HiPPO
 
 
-def train(args):
+def evaluate(args):
     """
-    Main function to train over a certain number of epochs
+    Main function to evaluate a model on a dataset.
     """
 
     ssm_size = args.ssm_size_base
@@ -257,240 +252,248 @@ def train(args):
 
     best_test_loss = chkpt_metadata["best_test_loss"]
     best_test_acc = chkpt_metadata["best_test_acc"]
-    step = chkpt_metadata["last_step"]
-    epoch_start = chkpt_metadata["next_epoch"]
+    # step = chkpt_metadata["last_step"]
+    # epoch_start = chkpt_metadata["next_epoch"]
 
-    # Training loop over epochs
-    best_loss, best_acc, best_epoch = (
-        100000000,
-        -100000000.0,
-        0,
-    )  # This best loss is val_loss
-    count, best_val_loss = 0, 100000000  # This line is for early stopping purposes
-    lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
-    steps_per_epoch = int(train_size / args.bsz)
-    for epoch in range(epoch_start, args.epochs):
-        print(f"[*] Starting Training Epoch {epoch + 1}...")
+    # # Training loop over epochs
+    # best_loss, best_acc, best_epoch = (
+    #     100000000,
+    #     -100000000.0,
+    #     0,
+    # )  # This best loss is val_loss
+    # count, best_val_loss = 0, 100000000  # This line is for early stopping purposes
+    # lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
+    # steps_per_epoch = int(train_size / args.bsz)
+    # print(f"[*] Starting Training Epoch {epoch + 1}...")
 
-        if epoch < args.warmup_end:
-            print("using linear warmup for epoch {}".format(epoch + 1))
-            decay_function = linear_warmup
-            end_step = steps_per_epoch * args.warmup_end
+    # if epoch < args.warmup_end:
+    #     print("using linear warmup for epoch {}".format(epoch + 1))
+    #     decay_function = linear_warmup
+    #     end_step = steps_per_epoch * args.warmup_end
 
-        elif args.cosine_anneal:
-            print("using cosine annealing for epoch {}".format(epoch + 1))
-            decay_function = cosine_annealing
-            # for per step learning rate decay
-            end_step = steps_per_epoch * args.epochs - (
-                steps_per_epoch * args.warmup_end
-            )
-        else:
-            print("using constant lr for epoch {}".format(epoch + 1))
-            decay_function = constant_lr
-            end_step = None
+    # elif args.cosine_anneal:
+    #     print("using cosine annealing for epoch {}".format(epoch + 1))
+    #     decay_function = cosine_annealing
+    #     # for per step learning rate decay
+    #     end_step = steps_per_epoch * args.epochs - (
+    #         steps_per_epoch * args.warmup_end
+    #     )
+    # else:
+    #     print("using constant lr for epoch {}".format(epoch + 1))
+    #     decay_function = constant_lr
+    #     end_step = None
 
-        # TODO: Switch to letting Optax handle this.
-        #  Passing this around to manually handle per step learning rate decay.
-        lr_params = (
-            decay_function,
-            ssm_lr,
-            lr,
-            step,
-            end_step,
-            args.opt_config,
-            args.lr_min,
+    # # TODO: Switch to letting Optax handle this.
+    # #  Passing this around to manually handle per step learning rate decay.
+    # lr_params = (
+    #     decay_function,
+    #     ssm_lr,
+    #     lr,
+    #     step,
+    #     end_step,
+    #     args.opt_config,
+    #     args.lr_min,
+    # )
+
+    train_rng, skey = random.split(train_rng)
+    # state, train_loss, step = train_epoch(
+    #     state,
+    #     skey,
+    #     model_cls,
+    #     trainloader,
+    #     seq_len,
+    #     in_dim,
+    #     args.batchnorm,
+    #     lr_params,
+    # )
+    train_loss, train_acc = validate(
+        state, skey, model_cls, trainloader, seq_len, in_dim, args.batchnorm
+    )
+
+    test_loss, test_acc = None, None
+    if valloader is not None:
+        print(f"[*] Running Validation...")
+        # adding the prng key so that aqt/flax doesn't complain
+        val_loss, val_acc = validate(
+            state, skey, model_cls, valloader, seq_len, in_dim, args.batchnorm
         )
 
-        train_rng, skey = random.split(train_rng)
-        state, train_loss, step = train_epoch(
-            state,
-            skey,
-            model_cls,
-            trainloader,
-            seq_len,
-            in_dim,
-            args.batchnorm,
-            lr_params,
+        print(f"[*] Running Test...")
+        test_loss, test_acc = validate(
+            state, skey, model_cls, testloader, seq_len, in_dim, args.batchnorm
         )
 
-        if valloader is not None:
-            print(f"[*] Running Epoch {epoch + 1} Validation...")
-            # adding the prng key so that aqt/flax doesn't complain
-            val_loss, val_acc = validate(
-                state, skey, model_cls, valloader, seq_len, in_dim, args.batchnorm
-            )
-
-            print(f"[*] Running Epoch {epoch + 1} Test...")
-            test_loss, test_acc = validate(
-                state, skey, model_cls, testloader, seq_len, in_dim, args.batchnorm
-            )
-
-            print(f"\n=>> Epoch {epoch + 1} Metrics ===")
-            print(
-                f"\tTrain Loss: {train_loss:.5f} -- Val Loss: {val_loss:.5f}"
-                f" --Test Loss: {test_loss:.5f} --"
-                f" Val Accuracy: {val_acc:.4f}"
-                f" Test Accuracy: {test_acc:.4f}"
-            )
-
-        else:
-            # else use test set as validation set (e.g. IMDB)
-            print(f"[*] Running Epoch {epoch + 1} Test...")
-            val_loss, val_acc = validate(
-                state, model_cls, testloader, seq_len, in_dim, args.batchnorm
-            )
-
-            print(f"\n=>> Epoch {epoch + 1} Metrics ===")
-            print(
-                f"\tTrain Loss: {train_loss:.5f}  --Test Loss: {val_loss:.5f} --"
-                f" Test Accuracy: {val_acc:.4f}"
-            )
-
-        # For early stopping purposes
-        if val_loss < best_val_loss:
-            count = 0
-            best_val_loss = val_loss
-        else:
-            count += 1
-
-        if val_acc > best_acc:
-            # Increment counters etc.
-            count = 0
-            best_loss, best_acc, best_epoch = val_loss, val_acc, epoch
-            if valloader is not None:
-                best_test_loss, best_test_acc = test_loss, test_acc
-            else:
-                best_test_loss, best_test_acc = best_loss, best_acc
-
-            # Do some validation on improvement.
-            if speech:
-                # Evaluate on resolution 2 val and test sets
-                print(f"[*] Running Epoch {epoch + 1} Res 2 Validation...")
-                val2_loss, val2_acc = validate(
-                    state,
-                    model_cls,
-                    aux_dataloaders["valloader2"],
-                    int(seq_len // 2),
-                    in_dim,
-                    args.batchnorm,
-                    step_rescale=2.0,
-                )
-
-                print(f"[*] Running Epoch {epoch + 1} Res 2 Test...")
-                test2_loss, test2_acc = validate(
-                    state,
-                    model_cls,
-                    aux_dataloaders["testloader2"],
-                    int(seq_len // 2),
-                    in_dim,
-                    args.batchnorm,
-                    step_rescale=2.0,
-                )
-                print(f"\n=>> Epoch {epoch + 1} Res 2 Metrics ===")
-                print(
-                    f"\tVal2 Loss: {val2_loss:.5f} --Test2 Loss: {test2_loss:.5f} --"
-                    f" Val Accuracy: {val2_acc:.4f}"
-                    f" Test Accuracy: {test2_acc:.4f}"
-                )
-
-        # For learning rate decay purposes:
-        input = lr, ssm_lr, lr_count, val_acc, opt_acc
-        lr, ssm_lr, lr_count, opt_acc = reduce_lr_on_plateau(
-            input,
-            factor=args.reduce_factor,
-            patience=args.lr_patience,
-            lr_min=args.lr_min,
-        )
-
-        # Print best accuracy & loss so far...
+        print(f"\n=>> Metrics ===")
         print(
-            f"\tBest Val Loss: {best_loss:.5f} -- Best Val Accuracy:"
-            f" {best_acc:.4f} at Epoch {best_epoch + 1}\n"
-            f"\tBest Test Loss: {best_test_loss:.5f} -- Best Test Accuracy:"
-            f" {best_test_acc:.4f} at Epoch {best_epoch + 1}\n"
+            f"\tTrain Loss: {train_loss:.5f} -- Val Loss: {val_loss:.5f}"
+            f" --Test Loss: {test_loss:.5f} --"
+            f" Train Accuracy: {train_acc:.4f} Val Accuracy: {val_acc:.4f}"
+            f" Test Accuracy: {test_acc:.4f}"
         )
 
-        if valloader is not None:
-            if speech:
-                wandb.log(
-                    {
-                        "Training Loss": train_loss,
-                        "Val loss": val_loss,
-                        "Val Accuracy": val_acc,
-                        "Test Loss": test_loss,
-                        "Test Accuracy": test_acc,
-                        "Val2 loss": val2_loss,
-                        "Val2 Accuracy": val2_acc,
-                        "Test2 Loss": test2_loss,
-                        "Test2 Accuracy": test2_acc,
-                        "count": count,
-                        "Learning rate count": lr_count,
-                        "Opt acc": opt_acc,
-                        "lr": state.opt_state.inner_states[
-                            "regular"
-                        ].inner_state.hyperparams["learning_rate"],
-                        "ssm_lr": state.opt_state.inner_states[
-                            "ssm"
-                        ].inner_state.hyperparams["learning_rate"],
-                    }
-                )
-            else:
-                wandb.log(
-                    {
-                        "Training Loss": train_loss,
-                        "Val loss": val_loss,
-                        "Val Accuracy": val_acc,
-                        "Test Loss": test_loss,
-                        "Test Accuracy": test_acc,
-                        "count": count,
-                        "Learning rate count": lr_count,
-                        "Opt acc": opt_acc,
-                        "lr": state.opt_state.inner_states[
-                            "regular"
-                        ].inner_state.hyperparams["learning_rate"],
-                        "ssm_lr": state.opt_state.inner_states[
-                            "ssm"
-                        ].inner_state.hyperparams["learning_rate"],
-                    }
-                )
+    else:
+        # else use test set as validation set (e.g. IMDB)
+        print(f"[*] Running Test...")
+        val_loss, val_acc = validate(
+            state, model_cls, testloader, seq_len, in_dim, args.batchnorm
+        )
 
+        print(f"\n=>> Metrics ===")
+        print(
+            f"\tTrain Loss: {train_loss:.5f}  --Test Loss: {val_loss:.5f} --"
+            f" Train Accuracy: {train_acc:.4f} Test Accuracy: {val_acc:.4f}"
+        )
+
+    # # For early stopping purposes
+    # if val_loss < best_val_loss:
+    #     count = 0
+    #     best_val_loss = val_loss
+    # else:
+    #     count += 1
+
+    # if val_acc > best_acc:
+    #     # Increment counters etc.
+    #     count = 0
+    #     best_loss, best_acc, best_epoch = val_loss, val_acc, epoch
+    #     if valloader is not None:
+    #         best_test_loss, best_test_acc = test_loss, test_acc
+    #     else:
+    #         best_test_loss, best_test_acc = best_loss, best_acc
+
+    #     # Do some validation on improvement.
+    #     if speech:
+    #         # Evaluate on resolution 2 val and test sets
+    #         print(f"[*] Running Epoch {epoch + 1} Res 2 Validation...")
+    #         val2_loss, val2_acc = validate(
+    #             state,
+    #             model_cls,
+    #             aux_dataloaders["valloader2"],
+    #             int(seq_len // 2),
+    #             in_dim,
+    #             args.batchnorm,
+    #             step_rescale=2.0,
+    #         )
+
+    #         print(f"[*] Running Epoch {epoch + 1} Res 2 Test...")
+    #         test2_loss, test2_acc = validate(
+    #             state,
+    #             model_cls,
+    #             aux_dataloaders["testloader2"],
+    #             int(seq_len // 2),
+    #             in_dim,
+    #             args.batchnorm,
+    #             step_rescale=2.0,
+    #         )
+    #         print(f"\n=>> Epoch {epoch + 1} Res 2 Metrics ===")
+    #         print(
+    #             f"\tVal2 Loss: {val2_loss:.5f} --Test2 Loss: {test2_loss:.5f} --"
+    #             f" Val Accuracy: {val2_acc:.4f}"
+    #             f" Test Accuracy: {test2_acc:.4f}"
+    #         )
+
+    # # For learning rate decay purposes:
+    # input = lr, ssm_lr, lr_count, val_acc, opt_acc
+    # lr, ssm_lr, lr_count, opt_acc = reduce_lr_on_plateau(
+    #     input,
+    #     factor=args.reduce_factor,
+    #     patience=args.lr_patience,
+    #     lr_min=args.lr_min,
+    # )
+
+    # # Print best accuracy & loss so far...
+    # print(
+    #     f"\tBest Val Loss: {best_loss:.5f} -- Best Val Accuracy:"
+    #     f" {best_acc:.4f} at Epoch {best_epoch + 1}\n"
+    #     f"\tBest Test Loss: {best_test_loss:.5f} -- Best Test Accuracy:"
+    #     f" {best_test_acc:.4f} at Epoch {best_epoch + 1}\n"
+    # )
+
+    if valloader is not None:
+        if speech:
+            wandb.log(
+                {
+                    "Training Loss": train_loss,
+                    "Training Accuracy": train_acc,
+                    "Val loss": val_loss,
+                    "Val Accuracy": val_acc,
+                    "Test Loss": test_loss,
+                    "Test Accuracy": test_acc,
+                    # "count": count,
+                    # "Learning rate count": lr_count,
+                    # "Opt acc": opt_acc,
+                    # "lr": state.opt_state.inner_states[
+                    #     "regular"
+                    # ].inner_state.hyperparams["learning_rate"],
+                    # "ssm_lr": state.opt_state.inner_states[
+                    #     "ssm"
+                    # ].inner_state.hyperparams["learning_rate"],
+                }
+            )
         else:
             wandb.log(
                 {
                     "Training Loss": train_loss,
+                    "Training Accuracy": train_acc,
                     "Val loss": val_loss,
                     "Val Accuracy": val_acc,
-                    "count": count,
-                    "Learning rate count": lr_count,
-                    "Opt acc": opt_acc,
-                    "lr": state.opt_state.inner_states[
-                        "regular"
-                    ].inner_state.hyperparams["learning_rate"],
-                    "ssm_lr": state.opt_state.inner_states[
-                        "ssm"
-                    ].inner_state.hyperparams["learning_rate"],
+                    "Test Loss": test_loss,
+                    "Test Accuracy": test_acc,
+                    # "count": count,
+                    # "Learning rate count": lr_count,
+                    # "Opt acc": opt_acc,
+                    # "lr": state.opt_state.inner_states[
+                    #     "regular"
+                    # ].inner_state.hyperparams["learning_rate"],
+                    # "ssm_lr": state.opt_state.inner_states[
+                    #     "ssm"
+                    # ].inner_state.hyperparams["learning_rate"],
                 }
             )
-        wandb.run.summary["Best Val Loss"] = best_loss
-        wandb.run.summary["Best Val Accuracy"] = best_acc
-        wandb.run.summary["Best Epoch"] = best_epoch
-        wandb.run.summary["Best Test Loss"] = best_test_loss
-        wandb.run.summary["Best Test Accuracy"] = best_test_acc
 
-        # save checkpoint
-        if chkpt_mngr is not None:
-            chkpt_metadata["best_test_loss"] = best_test_loss.item()
-            chkpt_metadata["best_test_acc"] = best_test_acc.item()
-            chkpt_metadata["last_step"] = step
-            chkpt_metadata["next_epoch"] = epoch + 1
-            chkpt_mngr.save(
-                step=epoch+1,
-                args=ocp.args.Composite(
-                    state=ocp.args.StandardSave(state),
-                    metadata=ocp.args.JsonSave(chkpt_metadata),
-                )
-            )
-            chkpt_mngr.wait_until_finished()
+    else:
+        wandb.log(
+            {
+                "Training Loss": train_loss,
+                "Training Accuracy": train_acc,
+                "Val loss": val_loss,
+                "Val Accuracy": val_acc,
+                # "count": count,
+                # "Learning rate count": lr_count,
+                # "Opt acc": opt_acc,
+                # "lr": state.opt_state.inner_states[
+                #     "regular"
+                # ].inner_state.hyperparams["learning_rate"],
+                # "ssm_lr": state.opt_state.inner_states[
+                #     "ssm"
+                # ].inner_state.hyperparams["learning_rate"],
+            }
+        )
+    wandb.run.summary["Training Loss"] = train_loss
+    wandb.run.summary["Training Accuracy"] = train_acc
+    wandb.run.summary["Val Loss"] = val_loss
+    wandb.run.summary["Val Accuracy"] = val_acc
+    wandb.run.summary["Test Loss"] = test_loss
+    wandb.run.summary["Test Accuracy"] = test_acc
+    # wandb.run.summary["Best Val Loss"] = best_loss
+    # wandb.run.summary["Best Val Accuracy"] = best_acc
+    # wandb.run.summary["Best Epoch"] = best_epoch
+    wandb.run.summary["Best Test Loss"] = best_test_loss
+    wandb.run.summary["Best Test Accuracy"] = best_test_acc
 
-        if count > args.early_stop_patience:
-            break
+    # # save checkpoint
+    # if chkpt_mngr is not None:
+    #     chkpt_metadata["best_test_loss"] = best_test_loss.item()
+    #     chkpt_metadata["best_test_acc"] = best_test_acc.item()
+    #     chkpt_metadata["last_step"] = step
+    #     chkpt_metadata["next_epoch"] = epoch + 1
+    #     chkpt_mngr.save(
+    #         step=epoch+1,
+    #         args=ocp.args.Composite(
+    #             state=ocp.args.StandardSave(state),
+    #             metadata=ocp.args.JsonSave(chkpt_metadata),
+    #         )
+    #     )
+    #     chkpt_mngr.wait_until_finished()
+
+    # if count > args.early_stop_patience:
+    #     break
