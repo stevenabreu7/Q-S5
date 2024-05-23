@@ -215,6 +215,8 @@ class QSequenceLayer(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.90
     step_rescale: float = 1.0
+    use_qlayernorm_if_quantized: bool = True
+    use_layernorm_bias: bool = True
 
     def setup(self):
         """Initializes the ssm, batch/layer norm and dropout
@@ -238,13 +240,16 @@ class QSequenceLayer(nn.Module):
             self.out2 = nn.Dense(self.d_model, dot_general=dot)
 
         if self.batchnorm:
+            print("using batchnorm")
             self.norm = nn.BatchNorm(use_running_average=not self.training,
                                      momentum=self.bn_momentum, axis_name='batch')
         else:
-            if act_bits is None:
-                self.norm = nn.LayerNorm()
+            if act_bits is None or not self.use_qlayernorm_if_quantized:
+                print(f"using layernorm: bias={self.use_layernorm_bias}")
+                self.norm = nn.LayerNorm(use_bias=self.use_layernorm_bias)
             else:
                 # only use qlayernorm if activations are quantized
+                print(f"using qlayernorm with precision: {act_bits}")
                 self.norm = QLayerNorm(scaling_quantization=act_bits)
 
         self.drop = nn.Dropout(

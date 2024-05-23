@@ -38,6 +38,8 @@ class QStackedEncoderModel(nn.Module):
     step_rescale: float = 1.0
     use_hard_sigmoid: bool = False
     use_q_gelu_approx: bool = False
+    use_qlayernorm_if_quantized: bool = True
+    use_layernorm_bias: bool = True
 
     def setup(self):
         """
@@ -59,7 +61,9 @@ class QStackedEncoderModel(nn.Module):
                 step_rescale=self.step_rescale,
                 q_bits_aw=self.q_bits_aw,
                 use_hard_sigmoid=self.use_hard_sigmoid,
-                use_q_gelu_approx=self.use_q_gelu_approx
+                use_q_gelu_approx=self.use_q_gelu_approx,
+                use_qlayernorm_if_quantized=self.use_qlayernorm_if_quantized,
+                use_layernorm_bias=self.use_layernorm_bias,
             )
             for _ in range(self.n_layers)
         ]
@@ -140,6 +144,8 @@ class QClassificationModel(nn.Module):
     step_rescale: float = 1.0
     use_hard_sigmoid: bool = False
     use_q_gelu_approx: bool = False
+    use_qlayernorm_if_quantized: bool = True
+    use_layernorm_bias: bool = True
 
     def setup(self):
         """
@@ -158,7 +164,9 @@ class QClassificationModel(nn.Module):
                             step_rescale=self.step_rescale,
                             q_bits_aw=self.q_bits_aw,
                             use_hard_sigmoid=self.use_hard_sigmoid,
-                            use_q_gelu_approx=self.use_q_gelu_approx
+                            use_q_gelu_approx=self.use_q_gelu_approx,
+                            use_qlayernorm_if_quantized=self.use_qlayernorm_if_quantized,
+                            use_layernorm_bias=self.use_layernorm_bias,
                                         )
         # NOTE: nn.Dense calls dot_general(activation, weights)
         dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
@@ -283,6 +291,8 @@ class QRetrievalModel(nn.Module):
     step_rescale: float = 1.0
     use_hard_sigmoid: bool = False
     use_q_gelu_approx: bool = False
+    use_qlayernorm_if_quantized: bool = True
+    use_layernorm_bias: bool = True
 
     def setup(self):
         """
@@ -311,7 +321,9 @@ class QRetrievalModel(nn.Module):
                             step_rescale=self.step_rescale,
                             q_bits_aw=self.q_bits_aw,
                             use_hard_sigmoid=self.use_hard_sigmoid,
-                            use_q_gelu_approx=self.use_q_gelu_approx
+                            use_q_gelu_approx=self.use_q_gelu_approx,
+                            use_qlayernorm_if_quantized=self.use_qlayernorm_if_quantized,
+                            use_layernorm_bias=self.use_layernorm_bias,
                                         )
         BatchRetrievalDecoder = nn.vmap(
             QRetrievalDecoder,
@@ -388,6 +400,8 @@ class QRegressionModel(nn.Module):
     step_rescale: float = 1.0
     use_hard_sigmoid: bool = False
     use_q_gelu_approx: bool = False
+    use_qlayernorm_if_quantized: bool = True
+    use_layernorm_bias: bool = True
 
     def setup(self):
         """
@@ -406,7 +420,9 @@ class QRegressionModel(nn.Module):
                             step_rescale=self.step_rescale,
                             q_bits_aw=self.q_bits_aw,
                             use_hard_sigmoid=self.use_hard_sigmoid,
-                            use_q_gelu_approx=self.use_q_gelu_approx
+                            use_q_gelu_approx=self.use_q_gelu_approx,
+                            use_qlayernorm_if_quantized=self.use_qlayernorm_if_quantized,
+                            use_layernorm_bias=self.use_layernorm_bias,
                                         )
         # NOTE: nn.Dense calls dot_general(activation, weights)
         dot = aqt.AqtDotGeneral(q_dot_maybe(*self.q_bits_aw, return_cfg=True))
