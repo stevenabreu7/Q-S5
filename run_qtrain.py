@@ -107,6 +107,11 @@ if __name__ == "__main__":
         default=False,
         help="use hard sigmoid instead of sigmoid"
     )
+    parser.add_argument(
+        '--use_layernorm_bias', type=str2bool, default=True,
+        help="whether to use a bias in the (unquantized) layernorm."
+    )
+
 
     # Model Parameters
     parser.add_argument(
@@ -262,7 +267,7 @@ if __name__ == "__main__":
         "noBCdecay:      no weight decay on B (ssm lr), no weight decay on C (ssm lr) \\",
     )
     parser.add_argument(
-        "--grad_clip_threshold", type=str, default=None, help="max norm for gradient clipping."
+        "--grad_clip_threshold", type=float, default=None, help="max norm for gradient clipping."
     )
     parser.add_argument("--jax_seed", type=int, default=1919, help="seed randomness")
 

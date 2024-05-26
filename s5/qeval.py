@@ -307,7 +307,7 @@ def evaluate(args):
         # else use test set as validation set (e.g. IMDB)
         print(f"[*] Running Test...")
         val_loss, val_acc = validate(
-            state, model_cls, testloader, seq_len, in_dim, args.batchnorm
+            state, skey, model_cls, testloader, seq_len, in_dim, args.batchnorm
         )
 
         print(f"\n=>> Metrics ===")
@@ -316,7 +316,10 @@ def evaluate(args):
             f" Train Accuracy: {train_acc:.4f} Test Accuracy: {val_acc:.4f}"
         )
 
-    with open(f"/home/sabreu/NeuroSSMs/ptq_results_{args.run_name}.txt", "w") as f:
+    folder = "/home/sabreu/NeuroSSMs/results/PTQ/"
+    os.makedirs(folder, exist_ok=True)
+    fname = f"ptq_results_{args.run_name}.txt"
+    with open(os.path.join(folder, fname), "w") as f:
         header = "train_loss,val_loss,test_loss,train_acc,val_acc,test_acc"
         f.write(f"{header}\n{train_loss},{val_loss},{test_loss},{train_acc},{val_acc},{test_acc}\n")
 
