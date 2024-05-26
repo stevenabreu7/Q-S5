@@ -149,6 +149,7 @@ def train(args):
             q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
             use_hard_sigmoid=args.hard_sigmoid,
             use_q_gelu_approx=args.qgelu_approx,
+            use_layernorm_bias=args.use_layernorm_bias,
         )
 
     else:
@@ -168,6 +169,7 @@ def train(args):
             q_bits_aw=(q_config.non_ssm_act_precision, q_config.non_ssm_precision),
             use_hard_sigmoid=args.hard_sigmoid,
             use_q_gelu_approx=args.qgelu_approx,
+            use_layernorm_bias=args.use_layernorm_bias,
         )
 
     # initialize training state
@@ -337,7 +339,7 @@ def train(args):
             # else use test set as validation set (e.g. IMDB)
             print(f"[*] Running Epoch {epoch + 1} Test...")
             val_loss, val_acc = validate(
-                state, model_cls, testloader, seq_len, in_dim, args.batchnorm
+                state, skey, model_cls, testloader, seq_len, in_dim, args.batchnorm
             )
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
