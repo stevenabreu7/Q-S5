@@ -99,12 +99,11 @@ def quant_binary_operator(q_i, q_j, qhad_fns):
 
 def quant_recurrent_scan(Lambda, Bu, x0, q_ops, reverse=False):
     had = q_ops.a_had[0]
-    def step(x_k_1, u_k):
-        print(Lambda.shape, x_k_1.shape)
-        x_k = had(Lambda, x_k_1) + Bu
+    def step(x_k_1, Bu_k):
+        x_k = had(Lambda, x_k_1) + Bu_k
         return x_k, x_k
 
-    return jax.vmap(jax.lax.scan(step, x0, Bu, reverse=reverse), in_axes=2)
+    return jax.lax.scan(step, x0, Bu, reverse=reverse)
 
 
 def build_apply_ssm(q_ops: QuantizedOperations, recurrent: bool) -> Callable:
