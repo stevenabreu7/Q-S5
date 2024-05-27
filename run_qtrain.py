@@ -112,6 +112,12 @@ if __name__ == "__main__":
         help="whether to use a bias in the (unquantized) layernorm."
     )
 
+    parser.add_argument(
+        '--recurrent',
+        type=str2bool,
+        default=False,
+        help="use recurrent instead of associative scan"
+    )
 
     # Model Parameters
     parser.add_argument(

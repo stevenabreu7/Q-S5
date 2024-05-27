@@ -97,10 +97,20 @@ def quant_binary_operator(q_i, q_j, qhad_fns):
     return A_out, Bu_out
 
 
-def build_apply_ssm(q_ops: QuantizedOperations) -> Callable:
+def quant_recurrent_scan(Lambda, Bu, x0, q_ops, reverse=False):
+    had = q_ops.a_had[0]
+    def step(x_k_1, u_k):
+        print(Lambda.shape, x_k_1.shape)
+        x_k = had(Lambda, x_k_1) + Bu
+        return x_k, x_k
+
+    return jax.vmap(jax.lax.scan(step, x0, Bu, reverse=reverse), in_axes=2)
+
+
+def build_apply_ssm(q_ops: QuantizedOperations, recurrent: bool) -> Callable:
 
     q_bin_op = jax.vmap(jax.jit(partial(quant_binary_operator, qhad_fns=q_ops.a_had)))
-
+    
     def _apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
         """ Compute the LxH output of discretized SSM given an LxH input.
             Args:
@@ -144,6 +154,48 @@ def build_apply_ssm(q_ops: QuantizedOperations) -> Callable:
         else:
             return jax.vmap(jax.jit(c_dot_real))(xs)
 
+    def _apply_ssm_rec(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
+        """ Compute the LxH output of discretized SSM given an LxH input.
+            Args:
+                Lambda_bar (complex64): discretized diagonal state matrix    (P,)
+                B_bar      (complex64): discretized input matrix             (P, H)
+                C_tilde    (complex64): output matrix                        (H, P)
+                input_sequence (float32): input sequence of features         (L, H)
+                conj_sym (bool):         whether conjugate symmetry is enforced
+                bidirectional (bool):    whether bidirectional setup is used,
+                                      Note for this case C_tilde will have 2P cols
+            Returns:
+                ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
+
+        TODO:
+        - real/imag separation below makes training ~2x slower (quantizing one matrix only)
+          - might also mess with quantization (un-quantized addition of real and imag parts)
+        """
+
+        def b_dot(u):
+            re = q_ops.b_dot(B_bar.real, u.real) - q_ops.b_dot(B_bar.imag, u.imag)
+            im = q_ops.b_dot(B_bar.real, u.imag) + q_ops.b_dot(B_bar.imag, u.real)
+            return re + 1j * im
+
+        Bu_elements = jax.vmap(jax.jit(b_dot))(input_sequence)
+
+        _, xs = quant_recurrent_scan(Lambda_bar, Bu_elements, np.ones_like(Bu_elements[0]), q_ops)
+
+        if bidirectional:
+            _, xs2 = quant_recurrent_scan(Lambda_elements, Bu_elements,
+                                          np.ones_like(Bu_elements[0]), q_ops, reverse=True)
+            xs = np.concatenate((xs, xs2), axis=-1)
+
+        def c_dot_real(x):
+            return q_ops.c_dot(C_tilde.real, x.real) - q_ops.c_dot(C_tilde.imag, x.imag)
+
+        if conj_sym:
+            return jax.vmap(lambda x: 2*c_dot_real(x))(xs)
+        else:
+            return jax.vmap(jax.jit(c_dot_real))(xs)
+
+    if recurrent:
+        _apply_ssm = _apply_ssm_rec
     return _apply_ssm  # NOTE: jitting this function breaks the bidirectional argument
 
 
@@ -164,6 +216,7 @@ class qS5SSM(nn.Module):
     clip_eigs: bool = False
     bidirectional: bool = False
     step_rescale: float = 1.0
+    recurrent: bool = False
 
     """ The S5 SSM
         Args:
@@ -204,7 +257,7 @@ class qS5SSM(nn.Module):
         """
 
         self.q_ops = QuantizedOperations(self.q_config)
-        self.apply_ssm = build_apply_ssm(self.q_ops)
+        self.apply_ssm = build_apply_ssm(self.q_ops, self.recurrent)
 
         if self.conj_sym:
             # Need to account for case where we actually sample real B and C, and then multiply
@@ -326,6 +379,7 @@ def init_qS5SSM(H,
                conj_sym,
                clip_eigs,
                bidirectional,
+               recurrent,
                q_config,
                ):
     """Convenience function that will be used to initialize the SSM.
@@ -344,4 +398,5 @@ def init_qS5SSM(H,
                    conj_sym=conj_sym,
                    clip_eigs=clip_eigs,
                    bidirectional=bidirectional,
+                   recurrent=recurrent,
                    q_config=q_config)
