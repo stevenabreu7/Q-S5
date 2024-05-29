@@ -7,6 +7,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "--load_run_name", type=str, default=None,
+        help="name of the checkpoint to load. if None, use the run_name."
+    )
+
+    parser.add_argument(
         "--run_name", type=str, default=None,
         help="name of this run (for wandb and checkpoint folder). if None, no checkpoints are made."
     )

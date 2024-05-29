@@ -202,6 +202,37 @@ def train(args):
 
     # create checkpoint manager
     chkpt_mngr = None
+    if args.load_run_name is not None and args.checkpoint_dir is not None:
+        # create directory for model checkpoints
+        chkpt_path = os.path.join(args.checkpoint_dir, args.load_run_name)
+        os.makedirs(chkpt_path, exist_ok=True)
+
+        # create checkpoint manager
+        chkpt_options = ocp.CheckpointManagerOptions(
+            save_interval_steps=args.checkpoint_interval_steps,
+            max_to_keep=args.checkpoint_max_to_keep,
+        )
+        chkpt_mngr = ocp.CheckpointManager(
+            directory=chkpt_path,
+            item_names=("state", "metadata"),
+            options=chkpt_options,
+        )
+        
+        # check if we should load a checkpoint
+        if chkpt_mngr.latest_step() is not None:
+            abstract_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
+            restored = chkpt_mngr.restore(
+                chkpt_mngr.latest_step(),
+                args=ocp.args.Composite(
+                    state=ocp.args.StandardRestore(abstract_state),
+                    metadata=ocp.args.JsonRestore(),
+                )
+            )
+            restored_state = restored["state"]
+        
+        # remove this checkpoint manager (avoid overwriting)
+        chkpt_mngr = None
+
     if args.run_name is not None and args.checkpoint_dir is not None:
         # create directory for model checkpoints
         chkpt_path = os.path.join(args.checkpoint_dir, args.run_name)
@@ -217,10 +248,10 @@ def train(args):
             item_names=("state", "metadata"),
             options=chkpt_options,
         )
-        
-        # check if we should load a checkpoint
-        abstract_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
-        if chkpt_mngr.latest_step() is not None:
+
+        # check if we should load a checkpoint (make sure we didn't already load one above)
+        if chkpt_mngr.latest_step() is not None and restored_state is None:
+            abstract_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
             restored = chkpt_mngr.restore(
                 chkpt_mngr.latest_step(),
                 args=ocp.args.Composite(
