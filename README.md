@@ -1,6 +1,6 @@
 # [Fork] Quantized S5
 
-For more information on our quantized S5 model and experiments, please see the repo [kmheckel/NeuroSSMs](https://github.com/kmheckel/NeuroSSMs) which will be made public soon...
+For more information on our quantized S5 model and experiments, please see the repo [kmheckel/Q-S5](https://github.com/kmheckel/Q-S5).
 
 # S5: Simplified State Space Layers for Sequence Modeling
 
