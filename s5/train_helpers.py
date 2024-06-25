@@ -154,7 +154,30 @@ def create_train_state(model_cls,
         params = unfreeze(variables["params"])
         # Note: `unfreeze()` is for using Optax.
 
-    if opt_config in ["standard"]:
+    if opt_config in ["qaft"]:
+        print("using quantization-aware fine-tuning optimization setup (SGD, no decay)")
+        if dt_global:
+            ssm_fn = map_nested_fn(
+                lambda k, _: "ssm"
+                if k in ["B", "Lambda_re", "Lambda_im", "norm"]
+                else ("none" if k in [] else "regular")
+            )
+
+        else:
+            ssm_fn = map_nested_fn(
+                lambda k, _: "ssm"
+                if k in ["B", "Lambda_re", "Lambda_im", "log_step", "norm"]
+                else ("none" if k in [] else "regular")
+            )
+        tx = optax.multi_transform(
+            {
+                "none": inject_hyperparams_clipped(optax.sgd)(learning_rate=0.0),
+                "ssm": inject_hyperparams_clipped(optax.sgd)(learning_rate=ssm_lr, momentum=0.9),
+                "regular": inject_hyperparams_clipped(optax.sgd)(learning_rate=lr, momentum=0.9),
+            },
+            ssm_fn,
+        )
+    elif opt_config in ["standard"]:
         """This option applies weight decay to C, but B is kept with the
             SSM parameters with no weight decay.
         """

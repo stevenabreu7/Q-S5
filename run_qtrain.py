@@ -264,12 +264,13 @@ if __name__ == "__main__":
         "--opt_config",
         type=str,
         default="standard",
-        choices=["standard", "BandCdecay", "BfastandCdecay", "noBCdecay"],
+        choices=["standard", "BandCdecay", "BfastandCdecay", "noBCdecay", "qaft"],
         help="Opt configurations: \\ "
         "standard:       no weight decay on B (ssm lr), weight decay on C (global lr) \\"
         "BandCdecay:     weight decay on B (ssm lr), weight decay on C (global lr) \\"
         "BfastandCdecay: weight decay on B (global lr), weight decay on C (global lr) \\"
-        "noBCdecay:      no weight decay on B (ssm lr), no weight decay on C (ssm lr) \\",
+        "noBCdecay:      no weight decay on B (ssm lr), no weight decay on C (ssm lr) \\"
+        "qaft:           quantization-aware fine-tuning (standard, using SGD+momentum) \\",
     )
     parser.add_argument(
         "--grad_clip_threshold", type=float, default=None, help="max norm for gradient clipping."
