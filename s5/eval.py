@@ -6,15 +6,14 @@ import jax.numpy as np
 import orbax.checkpoint as ocp
 import os
 from jax.scipy.linalg import block_diag
-import wandb
 
 from .train_helpers import (
     create_train_state,
     validate,
 )
 from .dataloading import Datasets
-from .qseq_model import QBatchClassificationModel, QRetrievalModel
-from .qssm_aqt import init_qS5SSM, QuantizationConfig
+from .seq_model import QBatchClassificationModel, QRetrievalModel
+from .ssm import init_qS5SSM, QuantizationConfig
 from .ssm_init import make_DPLR_HiPPO
 
 

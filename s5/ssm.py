@@ -1,3 +1,11 @@
+"""
+Quantized version of the S5 layer implementation from lindermanlab/S5.
+
+Using the `aqt` JAX library for quantization.
+
+TODOs:
+- test this
+"""
 from functools import partial
 import jax
 import jax.numpy as np
@@ -5,90 +13,141 @@ from flax import linen as nn
 from jax.nn.initializers import lecun_normal, normal
 
 from .ssm_init import init_CV, init_VinvB, init_log_steps, trunc_standard_normal
+from .ssm import discretize_bilinear, discretize_zoh
+from .utils.quantization import q_dot_maybe, q_had_maybe
+
+from dataclasses import dataclass
+from typing import Callable, Optional, Tuple
 
 
-# Discretization functions
-def discretize_bilinear(Lambda, B_tilde, Delta):
-    """ Discretize a diagonalized, continuous-time linear SSM
-        using bilinear transform method.
-        Args:
-            Lambda (complex64): diagonal state matrix              (P,)
-            B_tilde (complex64): input matrix                      (P, H)
-            Delta (float32): discretization step sizes             (P,)
-        Returns:
-            discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+@dataclass
+class QuantizationConfig:
+    """Quantization configuration for S5.
+
+    Attributes:
+        a_precision: integer precision for A matrix operations.
+        b_precision: integer precision for B matrix operations.
+        c_precision: integer precision for C matrix operations.
+        d_precision: integer precision for D matrix operations.
+        non_ssm_precision: integer precision for all layer operations outside of the SSMs (Dense encode/decode layers)
+        ssm_act_precision: integer precision for all SSM activations
+        non_ssm_act_precision: integer precision for all non-SSM activations
     """
-    Identity = np.ones(Lambda.shape[0])
+    a_precision: Optional[int]
+    b_precision: Optional[int]
+    c_precision: Optional[int]
+    d_precision: Optional[int]
+    non_ssm_precision: Optional[int]
+    ssm_act_precision: Optional[int]
+    non_ssm_act_precision: Optional[int]
 
-    BL = 1 / (Identity - (Delta / 2.0) * Lambda)
-    Lambda_bar = BL * (Identity + (Delta / 2.0) * Lambda)
-    B_bar = (BL * Delta)[..., None] * B_tilde
-    return Lambda_bar, B_bar
 
+@dataclass
+class QuantizedOperations:
+    """(Possibly quantized) operations for S5.
 
-def discretize_zoh(Lambda, B_tilde, Delta):
-    """ Discretize a diagonalized, continuous-time linear SSM
-        using zero-order hold method.
-        Args:
-            Lambda (complex64): diagonal state matrix              (P,)
-            B_tilde (complex64): input matrix                      (P, H)
-            Delta (float32): discretization step sizes             (P,)
-        Returns:
-            discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+    Attributes:
+        a_had: (possibly quantized) hadamard product operation for A matrix.
+            this is actually a tuple of two hadamart product operators.
+            the first one is aa_had for A * A operations (WW)
+            the second one is abu_had for A * Bu operations (WA)
+        b_dot: (possibly quantized) dot product operation for B matrix.
+        c_dot: (possibly quantized) dot product operation for C matrix.
+        d_had: (possibly quantized) hadamard product operation for D matrix.
     """
-    Identity = np.ones(Lambda.shape[0])
-    Lambda_bar = np.exp(Lambda * Delta)
-    B_bar = (1/Lambda * (Lambda_bar-Identity))[..., None] * B_tilde
-    return Lambda_bar, B_bar
+    a_had: Tuple[Callable]  # approved
+    b_dot: Callable  # approved
+    c_dot: Callable  # approved
+    d_had: Callable  # approved
+    non_ssm_dot: Callable  # TODO
+
+    def __init__(self, q_config: QuantizationConfig):
+        self.a_had = (
+            q_had_maybe(q_config.a_precision, q_config.a_precision),
+            q_had_maybe(q_config.a_precision, q_config.ssm_act_precision)
+        )
+        self.b_dot = q_dot_maybe(q_config.b_precision, q_config.ssm_act_precision)
+        self.c_dot = q_dot_maybe(q_config.c_precision, q_config.ssm_act_precision)
+        self.d_had = q_had_maybe(q_config.d_precision, q_config.ssm_act_precision)
+        self.non_ssm_dot = q_dot_maybe(q_config.non_ssm_precision, q_config.ssm_act_precision)
 
 
 # Parallel scan operations
-@jax.vmap
-def binary_operator(q_i, q_j):
+def quant_binary_operator(q_i, q_j, qhad_fns):
     """ Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
         Args:
             q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
             q_j: tuple containing A_j and Bu_j at position j       (P,), (P,)
         Returns:
             new element ( A_out, Bu_out )
+    TODO: work out if the un-quantized addition is okay.
     """
+    qhad_aa, qhad_abu = qhad_fns
     A_i, b_i = q_i
     A_j, b_j = q_j
-    return A_j * A_i, A_j * b_i + b_j
+    # # return A_j * A_i, A_j * b_i + b_j
+    # A_out = qhad_fn(A_j, A_i)
+    # Bu_out = qhad_fn(A_j, b_i) + b_j
+    A_out_re = qhad_aa(A_j.real, A_i.real) - qhad_aa(A_j.imag, A_i.imag)  # TODO(stevenabreu): quantize activations
+    A_out_im = qhad_aa(A_j.real, A_i.imag) + qhad_aa(A_j.imag, A_i.real)
+    A_out = A_out_re + 1j * A_out_im
+    Bu_out_re = qhad_abu(A_j.real, b_i.real) - qhad_abu(A_j.imag, b_i.imag)
+    Bu_out_im = qhad_abu(A_j.real, b_i.imag) + qhad_abu(A_j.imag, b_i.real)
+    Bu_out = Bu_out_re + 1j * Bu_out_im + b_j
+    return A_out, Bu_out
 
 
-def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
-    """ Compute the LxH output of discretized SSM given an LxH input.
-        Args:
-            Lambda_bar (complex64): discretized diagonal state matrix    (P,)
-            B_bar      (complex64): discretized input matrix             (P, H)
-            C_tilde    (complex64): output matrix                        (H, P)
-            input_sequence (float32): input sequence of features         (L, H)
-            conj_sym (bool):         whether conjugate symmetry is enforced
-            bidirectional (bool):    whether bidirectional setup is used,
-                                  Note for this case C_tilde will have 2P cols
-        Returns:
-            ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
-    """
-    Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0],
-                                            Lambda_bar.shape[0]))
-    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
+def build_apply_ssm(q_ops: QuantizedOperations) -> Callable:
 
-    _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
+    q_bin_op = jax.vmap(jax.jit(partial(quant_binary_operator, qhad_fns=q_ops.a_had)))
 
-    if bidirectional:
-        _, xs2 = jax.lax.associative_scan(binary_operator,
-                                          (Lambda_elements, Bu_elements),
-                                          reverse=True)
-        xs = np.concatenate((xs, xs2), axis=-1)
+    def _apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
+        """ Compute the LxH output of discretized SSM given an LxH input.
+            Args:
+                Lambda_bar (complex64): discretized diagonal state matrix    (P,)
+                B_bar      (complex64): discretized input matrix             (P, H)
+                C_tilde    (complex64): output matrix                        (H, P)
+                input_sequence (float32): input sequence of features         (L, H)
+                conj_sym (bool):         whether conjugate symmetry is enforced
+                bidirectional (bool):    whether bidirectional setup is used,
+                                      Note for this case C_tilde will have 2P cols
+            Returns:
+                ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
 
-    if conj_sym:
-        return jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs)
-    else:
-        return jax.vmap(lambda x: (C_tilde @ x).real)(xs)
+        TODO:
+        - real/imag separation below makes training ~2x slower (quantizing one matrix only)
+          - might also mess with quantization (un-quantized addition of real and imag parts)
+        """
+        Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0],
+                                                Lambda_bar.shape[0]))
+
+        def b_dot(u):
+            re = q_ops.b_dot(B_bar.real, u.real) - q_ops.b_dot(B_bar.imag, u.imag)
+            im = q_ops.b_dot(B_bar.real, u.imag) + q_ops.b_dot(B_bar.imag, u.real)
+            return re + 1j * im
+
+        Bu_elements = jax.vmap(jax.jit(b_dot))(input_sequence)
+
+        _, xs = jax.lax.associative_scan(q_bin_op, (Lambda_elements, Bu_elements))
+
+        if bidirectional:
+            _, xs2 = jax.lax.associative_scan(q_bin_op,
+                                              (Lambda_elements, Bu_elements),
+                                              reverse=True)
+            xs = np.concatenate((xs, xs2), axis=-1)
+
+        def c_dot_real(x):
+            return q_ops.c_dot(C_tilde.real, x.real) - q_ops.c_dot(C_tilde.imag, x.imag)
+
+        if conj_sym:
+            return jax.vmap(lambda x: 2*c_dot_real(x))(xs)
+        else:
+            return jax.vmap(jax.jit(c_dot_real))(xs)
+
+    return _apply_ssm  # NOTE: jitting this function breaks the bidirectional argument
 
 
-class S5SSM(nn.Module):
+class qS5SSM(nn.Module):
     Lambda_re_init: jax.Array
     Lambda_im_init: jax.Array
     V: jax.Array
@@ -100,6 +159,7 @@ class S5SSM(nn.Module):
     discretization: str
     dt_min: float
     dt_max: float
+    q_config: QuantizationConfig
     conj_sym: bool = True
     clip_eigs: bool = False
     bidirectional: bool = False
@@ -111,35 +171,40 @@ class S5SSM(nn.Module):
             Lambda_im_init (complex64): Imag part of init diag state matrix  (P,)
             V           (complex64): Eigenvectors used for init           (P,P)
             Vinv        (complex64): Inverse eigenvectors used for init   (P,P)
-            H           (int32):     Number of features of input seq 
+            H           (int32):     Number of features of input seq
             P           (int32):     state size
             C_init      (string):    Specifies How C is initialized
-                         Options: [trunc_standard_normal: sample from truncated standard normal 
+                         Options: [trunc_standard_normal: sample from truncated standard normal
                                                         and then multiply by V, i.e. C_tilde=CV.
                                    lecun_normal: sample from Lecun_normal and then multiply by V.
-                                   complex_normal: directly sample a complex valued output matrix 
+                                   complex_normal: directly sample a complex valued output matrix
                                                     from standard normal, does not multiply by V]
             conj_sym    (bool):    Whether conjugate symmetry is enforced
             clip_eigs   (bool):    Whether to enforce left-half plane condition, i.e.
-                                   constrain real part of eigenvalues to be negative. 
-                                   True recommended for autoregressive task/unbounded sequence lengths
-                                   Discussed in https://arxiv.org/pdf/2206.11893.pdf.
+                                   constrain real part of eigenvalues to be negative.
+                                   True recommended for autoregressive task/unbounded sequence
+                                   lengths. Discussed in https://arxiv.org/pdf/2206.11893.pdf.
             bidirectional (bool):  Whether model is bidirectional, if True, uses two C matrices
-            discretization: (string) Specifies discretization method 
+            discretization: (string) Specifies discretization method
                              options: [zoh: zero-order hold method,
                                        bilinear: bilinear transform]
-            dt_min:      (float32): minimum value to draw timescale values from when 
+            dt_min:      (float32): minimum value to draw timescale values from when
                                     initializing log_step
-            dt_max:      (float32): maximum value to draw timescale values from when 
+            dt_max:      (float32): maximum value to draw timescale values from when
                                     initializing log_step
-            step_rescale:  (float32): allows for uniformly changing the timescale parameter, e.g. after training 
-                                    on a different resolution for the speech commands benchmark
+            step_rescale:  (float32): allows for uniformly changing the timescale parameter, e.g.
+                                    after training on a different resolution for the speech
+                                    commands benchmark
+            q_config:    (QuantizationConfig): Configuration for quantization.
     """
 
     def setup(self):
         """Initializes parameters once and performs discretization each time
            the SSM is applied to a sequence
         """
+
+        self.q_ops = QuantizedOperations(self.q_config)
+        self.apply_ssm = build_apply_ssm(self.q_ops)
 
         if self.conj_sym:
             # Need to account for case where we actually sample real B and C, and then multiply
@@ -224,7 +289,7 @@ class S5SSM(nn.Module):
         elif self.discretization in ["bilinear"]:
             self.Lambda_bar, self.B_bar = discretize_bilinear(self.Lambda, B_tilde, step)
         else:
-            raise NotImplementedError("Discretization method {} not implemented".format(self.discretization))
+            raise NotImplementedError(f"Discretization method {self.discretization}")
 
     def __call__(self, input_sequence):
         """
@@ -235,19 +300,20 @@ class S5SSM(nn.Module):
         Returns:
             output sequence (float32): (L, H)
         """
-        ys = apply_ssm(self.Lambda_bar,
-                       self.B_bar,
-                       self.C_tilde,
-                       input_sequence,
-                       self.conj_sym,
-                       self.bidirectional)
+        ys = self.apply_ssm(self.Lambda_bar,
+                            self.B_bar,
+                            self.C_tilde,
+                            input_sequence,
+                            self.conj_sym,
+                            self.bidirectional)
 
         # Add feedthrough matrix output Du;
-        Du = jax.vmap(lambda u: self.D * u)(input_sequence)
-        return ys + Du
+        # self.D * u can be replaced with the quant vector product einsum now.
+        Du = jax.vmap(lambda u: self.q_ops.d_had(self.D, u))(input_sequence)
+        return ys + Du  # TODO: make sure this is also quantized
 
 
-def init_S5SSM(H,
+def init_qS5SSM(H,
                P,
                Lambda_re_init,
                Lambda_im_init,
@@ -259,11 +325,12 @@ def init_S5SSM(H,
                dt_max,
                conj_sym,
                clip_eigs,
-               bidirectional
+               bidirectional,
+               q_config,
                ):
     """Convenience function that will be used to initialize the SSM.
        Same arguments as defined in S5SSM above."""
-    return partial(S5SSM,
+    return partial(qS5SSM,
                    H=H,
                    P=P,
                    Lambda_re_init=Lambda_re_init,
@@ -276,4 +343,5 @@ def init_S5SSM(H,
                    dt_max=dt_max,
                    conj_sym=conj_sym,
                    clip_eigs=clip_eigs,
-                   bidirectional=bidirectional)
+                   bidirectional=bidirectional,
+                   q_config=q_config)

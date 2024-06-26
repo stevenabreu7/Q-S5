@@ -1,14 +1,13 @@
 import argparse
 from s5.utils.util import str2bool
-from s5.qtrain import train
+from s5.eval import evaluate
 from s5.dataloading import Datasets
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--load_run_name", type=str, default=None,
-        help="name of the checkpoint to load. if None, use the run_name."
+        "--load_run_name", type=str, default=None, help="name of run to load"
     )
 
     parser.add_argument(
@@ -112,11 +111,19 @@ if __name__ == "__main__":
         default=False,
         help="use hard sigmoid instead of sigmoid"
     )
+
+    parser.add_argument(
+        '--use_qlayernorm_if_quantized', type=str2bool, default=True,
+        help="use quantized layernorm if quantized (default: True). If false, force *un*quantized layernorm (even with quantized activations)."
+    )
+    parser.add_argument(
+        '--remove_norm_bias_from_checkpoint', type=str2bool, default=False,
+        help="when loading the checkpoint, remove the biases from the norms."
+    )
     parser.add_argument(
         '--use_layernorm_bias', type=str2bool, default=True,
         help="whether to use a bias in the (unquantized) layernorm."
     )
-
 
     # Model Parameters
     parser.add_argument(
@@ -264,17 +271,16 @@ if __name__ == "__main__":
         "--opt_config",
         type=str,
         default="standard",
-        choices=["standard", "BandCdecay", "BfastandCdecay", "noBCdecay", "qaft"],
+        choices=["standard", "BandCdecay", "BfastandCdecay", "noBCdecay"],
         help="Opt configurations: \\ "
         "standard:       no weight decay on B (ssm lr), weight decay on C (global lr) \\"
         "BandCdecay:     weight decay on B (ssm lr), weight decay on C (global lr) \\"
         "BfastandCdecay: weight decay on B (global lr), weight decay on C (global lr) \\"
-        "noBCdecay:      no weight decay on B (ssm lr), no weight decay on C (ssm lr) \\"
-        "qaft:           quantization-aware fine-tuning (standard, using SGD+momentum) \\",
+        "noBCdecay:      no weight decay on B (ssm lr), no weight decay on C (ssm lr) \\",
     )
     parser.add_argument(
-        "--grad_clip_threshold", type=float, default=None, help="max norm for gradient clipping."
+        "--grad_clip_threshold", type=str, default=None, help="max norm for gradient clipping."
     )
     parser.add_argument("--jax_seed", type=int, default=1919, help="seed randomness")
 
-    train(parser.parse_args())
+    evaluate(parser.parse_args())
