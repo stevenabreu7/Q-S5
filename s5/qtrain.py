@@ -128,6 +128,7 @@ def train(args):
         conj_sym=args.conj_sym,
         clip_eigs=args.clip_eigs,
         bidirectional=args.bidirectional,
+        recurrent=args.recurrent,
         q_config=q_config,
     )
 
